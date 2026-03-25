@@ -1,32 +1,21 @@
 {
-  "description": "",
+  "name": "wms-system",
+  "description": "Склад — система учёта товаров",
   "dependencies": {
-    "@prisma/client": "^5.21.0",
-    "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
-    "dotenv": "^17.3.1",
     "express": "^5.2.1",
-    "jsonwebtoken": "^9.0.3",
     "socket.io": "^4.8.3",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.6",
-    "@types/node": "^25.5.0",
     "concurrently": "^9.2.1",
-    "nodemon": "^3.1.14",
-    "prisma": "^5.21.0",
-    "ts-node": "^10.9.2",
-    "typescript": "^6.0.2"
+    "nodemon": "^3.1.14"
   },
   "scripts": {
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
     "server:dev": "nodemon server.js",
     "client:dev": "cd client && npm run dev",
-    "build": "npx prisma db push --accept-data-loss && npx prisma generate && cd client && npm run build",
-    "start": "NODE_ENV=production node server.js",
-    "postinstall": "cd client && npm install"
-  },
-  "type": "commonjs"
+    "build": "cd client && npm install && npm run build",
+    "start": "node server.js"
+  }
 }
