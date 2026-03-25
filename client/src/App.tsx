@@ -80,7 +80,7 @@ const Sidebar = () => {
 
 const Header = () => (
   <div className="header">
-    <span style={{ fontSize: '14px', fontWeight: 400 }}>СКЛАД</span>
+    <span></span>
     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', borderRadius: 'var(--border-radius-sm)', background: 'var(--system-gray-6)', cursor: 'pointer', transition: 'background 0.15s' }}>
         <User size={16} color="var(--text-secondary)" />
