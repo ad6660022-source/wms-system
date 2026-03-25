@@ -24,8 +24,9 @@
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
     "server:dev": "nodemon server.js",
     "client:dev": "cd client && npm run dev",
-    "build": "cd client && npm run build",
-    "start": "NODE_ENV=production node server.js"
+    "build": "npx prisma generate && cd client && npm run build",
+    "start": "NODE_ENV=production node server.js",
+    "postinstall": "cd client && npm install"
   },
   "type": "commonjs"
 }
