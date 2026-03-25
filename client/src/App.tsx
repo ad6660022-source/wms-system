@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
-import { LayoutDashboard, Package, ArrowRightLeft, PackageOpen, ShoppingBag, ChevronDown, ChevronRight, Warehouse, Users, ClipboardList, BarChart3, User } from 'lucide-react';
+import { LayoutDashboard, Package, ArrowRightLeft, PackageOpen, ShoppingBag, ChevronDown, ChevronRight, Warehouse, Users, ClipboardList, User, Download } from 'lucide-react';
 import { io } from 'socket.io-client';
 import Inventory from './pages/Inventory';
 import Sold from './pages/Sold';
 import Suppliers from './pages/Suppliers';
 import AuditLog from './pages/AuditLog';
 import WarehouseView from './pages/WarehouseView';
-import Statistics from './pages/Statistics';
 
 const socket = io('/', { transports: ['websocket'] });
 
@@ -57,9 +56,7 @@ const Sidebar = () => {
         );
       })}
 
-      <NavLink to="/statistics" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-        <BarChart3 className="icon" size={18} /> Статистика
-      </NavLink>
+
       <NavLink to="/movements" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
         <ArrowRightLeft className="icon" size={18} /> Движение
       </NavLink>
@@ -90,41 +87,97 @@ const Header = () => (
   </div>
 );
 
+const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
+  'Активен': { bg: 'rgba(52,199,89,0.1)', text: '#34C759' },
+  'Архив': { bg: 'rgba(142,142,147,0.1)', text: '#8E8E93' },
+  'Брак': { bg: 'rgba(255,59,48,0.1)', text: '#FF3B30' },
+  'Продано': { bg: 'rgba(255,59,48,0.1)', text: '#FF3B30' },
+};
+
 const Dashboard = () => {
   const [products, setProducts] = useState<any[]>([]);
-  const load = () => { fetch('/api/products').then(r => r.json()).then(d => { if (Array.isArray(d)) setProducts(d); }).catch(() => {}); };
+  const [stats, setStats] = useState<any>(null);
+  const load = () => {
+    fetch('/api/products').then(r => r.json()).then(d => { if (Array.isArray(d)) setProducts(d); }).catch(() => {});
+    fetch('/api/statistics').then(r => r.json()).then(d => setStats(d)).catch(() => {});
+  };
   useEffect(() => { load(); socket.on('products:updated', load); return () => { socket.off('products:updated', load); }; }, []);
+
   const active = products.filter(p => p.status === 'Активен');
   const sold = products.filter(p => p.status === 'Продано');
   const totalValue = active.reduce((s, p) => s + p.price, 0);
   const soldValue = sold.reduce((s, p) => s + p.price, 0);
+
+  const exportExcel = async () => {
+    const res = await fetch('/api/export/statistics', { method: 'POST' });
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'statistics.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="page-container">
-      <h1 style={{ marginBottom: '18px' }}>Сводка</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+        <h1 style={{ margin: 0 }}>Сводка</h1>
+        <button className="btn btn-primary" onClick={exportExcel}><Download size={14} /> Выгрузить Excel</button>
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px' }}>
         <div className="card"><div className="caption">Всего товаров</div><div style={{ fontSize: '26px', fontWeight: 500, marginTop: '6px' }}>{products.length}</div></div>
         <div className="card"><div className="caption">Активных</div><div style={{ fontSize: '26px', fontWeight: 500, marginTop: '6px', color: 'var(--system-green)' }}>{active.length}</div></div>
         <div className="card"><div className="caption">Продано</div><div style={{ fontSize: '26px', fontWeight: 500, marginTop: '6px', color: 'var(--system-red)' }}>{sold.length}</div></div>
         <div className="card"><div className="caption">Брак</div><div style={{ fontSize: '26px', fontWeight: 500, marginTop: '6px', color: 'var(--system-orange)' }}>{products.filter(p => p.status === 'Брак').length}</div></div>
       </div>
+
       <h2 style={{ marginTop: '28px', marginBottom: '14px' }}>Финансы</h2>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
         <div className="card"><div className="caption">Стоимость на складе</div><div style={{ fontSize: '22px', fontWeight: 500, marginTop: '6px' }}>{totalValue.toLocaleString('ru-RU')} P</div></div>
         <div className="card"><div className="caption">Сумма продаж</div><div style={{ fontSize: '22px', fontWeight: 500, marginTop: '6px', color: 'var(--system-green)' }}>{soldValue.toLocaleString('ru-RU')} P</div></div>
       </div>
-      <h2 style={{ marginTop: '28px', marginBottom: '14px' }}>По складам</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
-        {['Василий', 'Анна'].map(w => {
-          const wActive = active.filter(p => p.warehouse === w);
-          return (
-            <div className="card" key={w}>
-              <div className="caption">{w}</div>
-              <div style={{ fontSize: '22px', fontWeight: 500, marginTop: '6px' }}>{wActive.length} шт</div>
-              <div style={{ fontSize: '14px', color: 'var(--text-secondary)', marginTop: '4px' }}>{wActive.reduce((s, p) => s + p.price, 0).toLocaleString('ru-RU')} P</div>
+
+      {stats && stats.warehouseStats && stats.warehouseStats.map((w: any) => (
+        <div key={w.name} style={{ marginTop: '28px' }}>
+          <h2 style={{ marginBottom: '6px' }}>Склад: {w.name}</h2>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '14px', fontSize: '13px' }}>
+            Активных: {w.active} | Продано: {w.sold} | Брак: {w.defect} | Стоимость: {w.totalValue.toLocaleString('ru-RU')} P
+          </p>
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+                <thead><tr style={{ background: 'var(--bg-primary)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
+                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Название</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Цена</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Категория</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Статус</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Дней на складе</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Дней до продажи</th>
+                </tr></thead>
+                <tbody>
+                  {w.products.length === 0 ? <tr><td colSpan={6} style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)' }}>Нет товаров</td></tr> :
+                    w.products.map((p: any, i: number) => {
+                      const c = STATUS_COLORS[p.status] || STATUS_COLORS['Активен'];
+                      return (
+                        <tr key={i} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                          <td style={{ padding: '10px 14px', fontWeight: 400 }}>{p.name}</td>
+                          <td style={{ padding: '10px 14px' }}>{Number(p.price).toLocaleString('ru-RU')} P</td>
+                          <td style={{ padding: '10px 14px', fontSize: '12px' }}>{p.category}</td>
+                          <td style={{ padding: '10px 14px' }}><span style={{ background: c.bg, color: c.text, padding: '3px 8px', borderRadius: '5px', fontSize: '12px' }}>{p.status}</span></td>
+                          <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                            {p.daysOnStock !== null ? <span style={{ fontWeight: 500, color: p.daysOnStock > 30 ? 'var(--system-orange)' : 'var(--text-primary)' }}>{p.daysOnStock}д</span> : '-'}
+                          </td>
+                          <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                            {p.daysToSell !== null ? <span style={{ fontWeight: 500, color: 'var(--system-green)' }}>{p.daysToSell}д</span> : '-'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
             </div>
-          );
-        })}
-      </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 };
@@ -175,7 +228,7 @@ export default function App() {
           <Route path="/inventory" element={<Inventory />} />
           <Route path="/sold" element={<Sold />} />
           <Route path="/warehouse/:name" element={<WarehouseView />} />
-          <Route path="/statistics" element={<Statistics />} />
+
           <Route path="/movements" element={<Movements />} />
           <Route path="/suppliers" element={<Suppliers />} />
           <Route path="/audit" element={<AuditLog />} />
