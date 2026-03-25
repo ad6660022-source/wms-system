@@ -24,7 +24,7 @@ const Sidebar = () => {
 
   return (
     <div className="sidebar">
-      <div className="sidebar-title" style={{ marginTop: '4px' }}>Меню</div>
+      <div className="sidebar-title" style={{ marginTop: '56px' }}>Меню</div>
       <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} end>
         <LayoutDashboard className="icon" size={18} /> Сводка
       </NavLink>
