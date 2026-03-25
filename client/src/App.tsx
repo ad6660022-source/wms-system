@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
-import { LayoutDashboard, Package, ArrowRightLeft, Bell, PackageOpen } from 'lucide-react';
+import { LayoutDashboard, Package, ArrowRightLeft, Bell, PackageOpen, ShoppingBag } from 'lucide-react';
 import { io } from 'socket.io-client';
 import Inventory from './pages/Inventory';
+import Sold from './pages/Sold';
 
 const socket = io('/', { transports: ['websocket'] });
 
@@ -24,6 +25,10 @@ const Sidebar = () => {
       <NavLink to="/inventory" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
         <Package className="icon" size={18} />
         Товары
+      </NavLink>
+      <NavLink to="/sold" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+        <ShoppingBag className="icon" size={18} />
+        Проданное
       </NavLink>
       <NavLink to="/movements" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
         <ArrowRightLeft className="icon" size={18} />
@@ -55,6 +60,7 @@ const Dashboard = () => {
   }, []);
 
   const active = products.filter(p => p.status === 'Активен').length;
+  const sold = products.filter(p => p.status === 'Продано').length;
   const archive = products.filter(p => p.status === 'Архив').length;
   const defect = products.filter(p => p.status === 'Брак').length;
 
@@ -69,6 +75,10 @@ const Dashboard = () => {
         <div className="card">
           <div className="caption">Активных</div>
           <div style={{ fontSize: '26px', fontWeight: 500, marginTop: '6px', color: 'var(--system-green)' }}>{active}</div>
+        </div>
+        <div className="card">
+          <div className="caption">Продано</div>
+          <div style={{ fontSize: '26px', fontWeight: 500, marginTop: '6px', color: 'var(--system-red)' }}>{sold}</div>
         </div>
         <div className="card">
           <div className="caption">В архиве</div>
@@ -149,6 +159,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/inventory" element={<Inventory />} />
+          <Route path="/sold" element={<Sold />} />
           <Route path="/movements" element={<Movements />} />
         </Routes>
       </Layout>

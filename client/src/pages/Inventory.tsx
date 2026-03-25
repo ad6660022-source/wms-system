@@ -40,7 +40,7 @@ export default function Inventory() {
   const [moveForm, setMoveForm] = useState({ destination: DESTINATIONS[0], comment: '', date: new Date().toISOString().split('T')[0] });
 
   const loadProducts = () => {
-    fetch('/api/products').then(r => r.json()).then(d => { if (Array.isArray(d)) setProducts(d); }).catch(() => {});
+    fetch('/api/products').then(r => r.json()).then(d => { if (Array.isArray(d)) setProducts(d.filter((p: Product) => p.status !== 'Продано')); }).catch(() => {});
   };
 
   useEffect(() => {

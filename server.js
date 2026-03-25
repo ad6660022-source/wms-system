@@ -50,6 +50,7 @@ app.post('/api/products/:id/move', (req, res) => {
   if (!product) return res.status(404).json({ error: 'Товар не найден' });
 
   let newStatus = 'Архив';
+  if (destination.startsWith('Продан')) newStatus = 'Продано';
   if (destination === 'Брак') newStatus = 'Брак';
 
   product.status = newStatus;
