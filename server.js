@@ -19,6 +19,7 @@ app.set('socketio', io);
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date() }));
 app.use('/api/products', require('./api/products'));
 app.use('/api/warehouses', require('./api/warehouses'));
+app.use('/api/movements', require('./api/movements'));
 
 // WebSocket Logic (Real-time sync)
 io.on('connection', (socket) => {

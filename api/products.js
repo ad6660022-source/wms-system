@@ -3,52 +3,73 @@ const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
-// Get all products + aggregate stocks
+// Get all products
 router.get('/', async (req, res) => {
   try {
     const products = await prisma.product.findMany({
-      include: {
-        stocks: {
-          include: { warehouse: true }
-        }
-      }
+      orderBy: { updatedAt: 'desc' }
     });
-
-    // Calculate total stock for each product
-    const enhanced = products.map(p => {
-      const totalAvailable = p.stocks.reduce((acc, s) => acc + (s.quantity - s.reserved), 0);
-      const totalReserved = p.stocks.reduce((acc, s) => acc + s.reserved, 0);
-      return { ...p, totalAvailable, totalReserved };
-    });
-
-    res.json(enhanced);
+    res.json(products);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch products: ' + error.message });
+    res.status(500).json({ error: error.message });
   }
 });
 
 // Create product
 router.post('/', async (req, res) => {
   try {
-    const { sku, barcode, name, category, purchasePrice, retailPrice, unit, minStock } = req.body;
+    const { name, imei, price, supplier, warehouse } = req.body;
     const product = await prisma.product.create({
       data: {
-        sku, 
-        barcode, 
-        name, 
-        category,
-        unit: unit || 'шт',
-        minStock: Number(minStock) || 0,
-        purchasePrice: Number(purchasePrice) || 0, 
-        retailPrice: Number(retailPrice) || 0
+        name,
+        imei: imei || null,
+        price: Number(price) || 0,
+        supplier: supplier || null,
+        warehouse: warehouse || 'Василий',
+        status: 'Активен'
       }
     });
-    
-    // Broadcast via socket
+
     const io = req.app.get('socketio');
-    if (io) io.emit('product:created', product);
+    if (io) io.emit('products:updated');
 
     res.status(201).json(product);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Update product status + create movement
+router.post('/:id/move', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { destination, comment, date } = req.body;
+
+    // Determine new status based on destination
+    let newStatus = 'Архив';
+    if (destination === 'Брак') newStatus = 'Брак';
+    if (destination === 'Потеря') newStatus = 'Архив';
+
+    // Create movement record
+    const movement = await prisma.movement.create({
+      data: {
+        productId: id,
+        destination,
+        comment: comment || null,
+        date: date ? new Date(date) : new Date()
+      }
+    });
+
+    // Update product status
+    const product = await prisma.product.update({
+      where: { id },
+      data: { status: newStatus }
+    });
+
+    const io = req.app.get('socketio');
+    if (io) io.emit('products:updated');
+
+    res.json({ product, movement });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
