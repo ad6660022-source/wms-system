@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const XLSX = require('xlsx');
 
 const app = express();
 const server = http.createServer(app);
@@ -15,20 +16,12 @@ app.use(express.json());
 // ====== IN-MEMORY STORAGE ======
 const products = [];
 const movements = [];
-const suppliers = [
-  { id: uuidv4(), name: 'Поставщик 1', phone: '', note: '' },
-];
+const suppliers = [];
 const auditLog = [];
-const notifications = [];
 
 function addAudit(action, details) {
   auditLog.unshift({ id: uuidv4(), action, details, date: new Date().toISOString() });
   if (auditLog.length > 500) auditLog.pop();
-}
-
-function addNotification(text) {
-  notifications.unshift({ id: uuidv4(), text, date: new Date().toISOString(), read: false });
-  io.emit('notification', { text });
 }
 
 // ====== PRODUCTS ======
@@ -60,7 +53,7 @@ app.put('/api/products/:id', (req, res) => {
   if (warehouse !== undefined) p.warehouse = warehouse;
   if (category !== undefined) p.category = category;
   p.updatedAt = new Date().toISOString();
-  addAudit('Отредактирован товар', p.name);
+  addAudit('Отредактирован', p.name);
   io.emit('products:updated');
   res.json(p);
 });
@@ -69,7 +62,7 @@ app.delete('/api/products/:id', (req, res) => {
   const idx = products.findIndex(x => x.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Не найден' });
   const removed = products.splice(idx, 1)[0];
-  addAudit('Удален товар', removed.name);
+  addAudit('Удален', removed.name);
   io.emit('products:updated');
   res.json({ ok: true });
 });
@@ -88,9 +81,34 @@ app.post('/api/products/:id/move', (req, res) => {
     destination, comment: comment || null,
     date: date || new Date().toISOString(), createdAt: new Date().toISOString(),
   });
-  addAudit('Движение товара', `${product.name} -> ${destination}`);
+  addAudit('Движение', `${product.name} -> ${destination}`);
   io.emit('products:updated');
   res.json({ product });
+});
+
+// BULK MOVE — multiple products at once
+app.post('/api/products/bulk-move', (req, res) => {
+  const { ids, destination, comment, date } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'Нет товаров' });
+  let newStatus = 'Архив';
+  if (destination.startsWith('Продан')) newStatus = 'Продано';
+  if (destination === 'Брак') newStatus = 'Брак';
+  const moved = [];
+  ids.forEach(id => {
+    const product = products.find(p => p.id === id);
+    if (!product) return;
+    product.status = newStatus;
+    product.updatedAt = new Date().toISOString();
+    movements.push({
+      id: uuidv4(), productId: product.id, productName: product.name,
+      destination, comment: comment || null,
+      date: date || new Date().toISOString(), createdAt: new Date().toISOString(),
+    });
+    moved.push(product.name);
+  });
+  addAudit('Массовое движение', `${moved.length} товаров -> ${destination}`);
+  io.emit('products:updated');
+  res.json({ count: moved.length });
 });
 
 app.post('/api/products/:id/return', (req, res) => {
@@ -104,8 +122,7 @@ app.post('/api/products/:id/return', (req, res) => {
     destination: 'Возврат на склад', comment: `Был: ${oldStatus}`,
     date: new Date().toISOString(), createdAt: new Date().toISOString(),
   });
-  addAudit('Возврат товара', `${product.name} (${oldStatus} -> Активен)`);
-  addNotification(`Товар "${product.name}" возвращен на склад`);
+  addAudit('Возврат', `${product.name} (${oldStatus} -> Активен)`);
   io.emit('products:updated');
   res.json({ product });
 });
@@ -117,7 +134,6 @@ app.get('/api/movements', (req, res) => {
 
 // ====== SUPPLIERS ======
 app.get('/api/suppliers', (req, res) => res.json(suppliers));
-
 app.post('/api/suppliers', (req, res) => {
   const { name, phone, note } = req.body;
   if (!name) return res.status(400).json({ error: 'Имя обязательно' });
@@ -127,7 +143,6 @@ app.post('/api/suppliers', (req, res) => {
   io.emit('suppliers:updated');
   res.status(201).json(s);
 });
-
 app.delete('/api/suppliers/:id', (req, res) => {
   const idx = suppliers.findIndex(x => x.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Не найден' });
@@ -140,18 +155,99 @@ app.delete('/api/suppliers/:id', (req, res) => {
 // ====== AUDIT LOG ======
 app.get('/api/audit', (req, res) => res.json(auditLog));
 
-// ====== NOTIFICATIONS ======
-app.get('/api/notifications', (req, res) => res.json(notifications));
+// ====== WAREHOUSE STATS ======
+app.get('/api/warehouse-stats', (req, res) => {
+  const warehouses = ['Василий', 'Анна'];
+  const stats = warehouses.map(w => {
+    const all = products.filter(p => p.warehouse === w);
+    return {
+      name: w,
+      active: all.filter(p => p.status === 'Активен').length,
+      sold: all.filter(p => p.status === 'Продано').length,
+      defect: all.filter(p => p.status === 'Брак').length,
+      total: all.length,
+    };
+  });
+  res.json(stats);
+});
 
-// ====== EXPORT CSV ======
-app.get('/api/export/products', (req, res) => {
-  const header = 'Название,IMEI,Цена,Поставщик,Склад,Категория,Статус,Дата\n';
-  const rows = products.map(p =>
-    `"${p.name}","${p.imei || ''}",${p.price},"${p.supplier || ''}","${p.warehouse}","${p.category}","${p.status}","${new Date(p.updatedAt).toLocaleDateString('ru-RU')}"`
-  ).join('\n');
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', 'attachment; filename=products.csv');
-  res.send('\uFEFF' + header + rows);
+// ====== STATISTICS ======
+app.get('/api/statistics', (req, res) => {
+  const warehouses = ['Василий', 'Анна'];
+  const warehouseStats = warehouses.map(w => {
+    const all = products.filter(p => p.warehouse === w);
+    return {
+      name: w,
+      active: all.filter(p => p.status === 'Активен').length,
+      sold: all.filter(p => p.status === 'Продано').length,
+      defect: all.filter(p => p.status === 'Брак').length,
+      totalValue: all.filter(p => p.status === 'Активен').reduce((s, p) => s + p.price, 0),
+      products: all.map(p => ({
+        name: p.name, imei: p.imei, price: p.price, status: p.status,
+        category: p.category, supplier: p.supplier,
+        createdAt: p.createdAt, updatedAt: p.updatedAt,
+        daysOnStock: p.status === 'Активен'
+          ? Math.floor((Date.now() - new Date(p.createdAt).getTime()) / 86400000)
+          : null,
+        daysToSell: p.status === 'Продано'
+          ? Math.floor((new Date(p.updatedAt).getTime() - new Date(p.createdAt).getTime()) / 86400000)
+          : null,
+      })),
+    };
+  });
+  res.json({ warehouseStats, totalProducts: products.length });
+});
+
+// ====== EXCEL EXPORT ======
+app.post('/api/export/excel', (req, res) => {
+  const { ids } = req.body; // if ids provided, export only those; else export all
+  let data = products;
+  if (Array.isArray(ids) && ids.length > 0) {
+    data = products.filter(p => ids.includes(p.id));
+  }
+  const rows = data.map(p => ({
+    'Название': p.name,
+    'IMEI': p.imei || '',
+    'Цена': p.price,
+    'Поставщик': p.supplier || '',
+    'Склад': p.warehouse,
+    'Категория': p.category,
+    'Статус': p.status,
+    'Дата создания': new Date(p.createdAt).toLocaleDateString('ru-RU'),
+    'Дата изменения': new Date(p.updatedAt).toLocaleDateString('ru-RU'),
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Товары');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename=products.xlsx');
+  res.send(buf);
+});
+
+app.post('/api/export/statistics', (req, res) => {
+  const rows = products.map(p => ({
+    'Название': p.name,
+    'IMEI': p.imei || '',
+    'Цена': p.price,
+    'Склад': p.warehouse,
+    'Категория': p.category,
+    'Статус': p.status,
+    'Дней на складе': p.status === 'Активен'
+      ? Math.floor((Date.now() - new Date(p.createdAt).getTime()) / 86400000)
+      : '-',
+    'Дней до продажи': p.status === 'Продано'
+      ? Math.floor((new Date(p.updatedAt).getTime() - new Date(p.createdAt).getTime()) / 86400000)
+      : '-',
+    'Дата добавления': new Date(p.createdAt).toLocaleDateString('ru-RU'),
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Статистика');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename=statistics.xlsx');
+  res.send(buf);
 });
 
 // ====== HEALTH ======
@@ -160,7 +256,7 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 // ====== SOCKET ======
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
-  socket.on('disconnect', () => console.log('Client disconnected:', socket.id));
+  socket.on('disconnect', () => console.log('Disconnected:', socket.id));
 });
 
 // ====== SERVE FRONTEND ======

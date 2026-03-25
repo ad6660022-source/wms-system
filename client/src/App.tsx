@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
-import { LayoutDashboard, Package, ArrowRightLeft, Bell, PackageOpen, ShoppingBag, ChevronDown, ChevronRight, Warehouse, Users, ClipboardList } from 'lucide-react';
+import { LayoutDashboard, Package, ArrowRightLeft, PackageOpen, ShoppingBag, ChevronDown, ChevronRight, Warehouse, Users, ClipboardList, BarChart3, User } from 'lucide-react';
 import { io } from 'socket.io-client';
 import Inventory from './pages/Inventory';
 import Sold from './pages/Sold';
 import Suppliers from './pages/Suppliers';
 import AuditLog from './pages/AuditLog';
 import WarehouseView from './pages/WarehouseView';
+import Statistics from './pages/Statistics';
 
 const socket = io('/', { transports: ['websocket'] });
 
@@ -14,13 +15,19 @@ const WAREHOUSES = ['Василий', 'Анна'];
 
 const Sidebar = () => {
   const [whOpen, setWhOpen] = useState(false);
+  const [whStats, setWhStats] = useState<any[]>([]);
+
+  const loadStats = () => {
+    fetch('/api/warehouse-stats').then(r => r.json()).then(d => { if (Array.isArray(d)) setWhStats(d); }).catch(() => {});
+  };
+  useEffect(() => { loadStats(); socket.on('products:updated', loadStats); return () => { socket.off('products:updated', loadStats); }; }, []);
+
   return (
     <div className="sidebar">
       <div style={{ padding: '0 10px 14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
         <div style={{ width: '28px', height: '28px', borderRadius: '7px', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <PackageOpen size={16} />
         </div>
-        <span style={{ fontSize: '15px', fontWeight: 500 }}>СКЛАД</span>
       </div>
       <div className="sidebar-title">Меню</div>
       <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} end>
@@ -33,19 +40,31 @@ const Sidebar = () => {
         <ShoppingBag className="icon" size={18} /> Проданное
       </NavLink>
 
-      {/* Expandable Склады */}
       <button onClick={() => setWhOpen(!whOpen)} className="nav-item" style={{ border: 'none', background: 'none', cursor: 'pointer', width: '100%', justifyContent: 'space-between' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Warehouse className="icon" size={18} /> Склады
         </span>
         {whOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
       </button>
-      {whOpen && WAREHOUSES.map(w => (
-        <NavLink key={w} to={`/warehouse/${encodeURIComponent(w)}`} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} style={{ paddingLeft: '38px', fontSize: '13px' }}>
-          {w}
-        </NavLink>
-      ))}
+      {whOpen && WAREHOUSES.map(w => {
+        const s = whStats.find(x => x.name === w);
+        return (
+          <NavLink key={w} to={`/warehouse/${encodeURIComponent(w)}`} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} style={{ paddingLeft: '38px', fontSize: '13px', justifyContent: 'space-between' }}>
+            <span>{w}</span>
+            {s && (
+              <span style={{ display: 'flex', gap: '6px', fontSize: '11px', opacity: 0.8 }}>
+                <span style={{ color: 'var(--system-green)' }}>{s.active}</span>
+                <span style={{ color: 'var(--system-red)' }}>{s.sold}</span>
+                <span style={{ color: 'var(--system-orange)' }}>{s.defect}</span>
+              </span>
+            )}
+          </NavLink>
+        );
+      })}
 
+      <NavLink to="/statistics" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+        <BarChart3 className="icon" size={18} /> Статистика
+      </NavLink>
       <NavLink to="/movements" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
         <ArrowRightLeft className="icon" size={18} /> Движение
       </NavLink>
@@ -62,9 +81,12 @@ const Sidebar = () => {
 const Header = () => (
   <div className="header">
     <span style={{ fontSize: '14px', fontWeight: 400 }}>СКЛАД</span>
-    <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-      <Bell size={18} />
-    </button>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', borderRadius: 'var(--border-radius-sm)', background: 'var(--system-gray-6)', cursor: 'pointer', transition: 'background 0.15s' }}>
+        <User size={16} color="var(--text-secondary)" />
+        <span style={{ fontSize: '13px', fontWeight: 400, color: 'var(--text-primary)' }}>Администратор</span>
+      </div>
+    </div>
   </div>
 );
 
@@ -72,12 +94,10 @@ const Dashboard = () => {
   const [products, setProducts] = useState<any[]>([]);
   const load = () => { fetch('/api/products').then(r => r.json()).then(d => { if (Array.isArray(d)) setProducts(d); }).catch(() => {}); };
   useEffect(() => { load(); socket.on('products:updated', load); return () => { socket.off('products:updated', load); }; }, []);
-
   const active = products.filter(p => p.status === 'Активен');
   const sold = products.filter(p => p.status === 'Продано');
   const totalValue = active.reduce((s, p) => s + p.price, 0);
   const soldValue = sold.reduce((s, p) => s + p.price, 0);
-
   return (
     <div className="page-container">
       <h1 style={{ marginBottom: '18px' }}>Сводка</h1>
@@ -94,14 +114,13 @@ const Dashboard = () => {
       </div>
       <h2 style={{ marginTop: '28px', marginBottom: '14px' }}>По складам</h2>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
-        {WAREHOUSES.map(w => {
-          const count = active.filter(p => p.warehouse === w).length;
-          const val = active.filter(p => p.warehouse === w).reduce((s, p) => s + p.price, 0);
+        {['Василий', 'Анна'].map(w => {
+          const wActive = active.filter(p => p.warehouse === w);
           return (
             <div className="card" key={w}>
               <div className="caption">{w}</div>
-              <div style={{ fontSize: '22px', fontWeight: 500, marginTop: '6px' }}>{count} шт</div>
-              <div style={{ fontSize: '14px', color: 'var(--text-secondary)', marginTop: '4px' }}>{val.toLocaleString('ru-RU')} P</div>
+              <div style={{ fontSize: '22px', fontWeight: 500, marginTop: '6px' }}>{wActive.length} шт</div>
+              <div style={{ fontSize: '14px', color: 'var(--text-secondary)', marginTop: '4px' }}>{wActive.reduce((s, p) => s + p.price, 0).toLocaleString('ru-RU')} P</div>
             </div>
           );
         })}
@@ -156,6 +175,7 @@ export default function App() {
           <Route path="/inventory" element={<Inventory />} />
           <Route path="/sold" element={<Sold />} />
           <Route path="/warehouse/:name" element={<WarehouseView />} />
+          <Route path="/statistics" element={<Statistics />} />
           <Route path="/movements" element={<Movements />} />
           <Route path="/suppliers" element={<Suppliers />} />
           <Route path="/audit" element={<AuditLog />} />

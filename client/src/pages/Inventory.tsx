@@ -21,7 +21,7 @@ export default function Inventory() {
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('updatedAt');
   const [sortOpen, setSortOpen] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
   const [showMove, setShowMove] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -54,6 +54,23 @@ export default function Inventory() {
     return list;
   }, [products, search, sortBy, filterWh, filterCat]);
 
+  const toggleSelect = (id: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedIds(next);
+  };
+
+  const toggleAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map(p => p.id)));
+    }
+  };
+
+  const allSelected = filtered.length > 0 && selectedIds.size === filtered.length;
+  const hasSelection = selectedIds.size > 0;
+
   const handleAdd = async () => {
     if (!addForm.name.trim()) return;
     await fetch('/api/products', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(addForm) });
@@ -62,51 +79,63 @@ export default function Inventory() {
   };
 
   const handleEdit = async () => {
-    if (!selectedId) return;
-    await fetch(`/api/products/${selectedId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editForm) });
-    setShowEdit(false); setSelectedId(null); load();
+    const id = Array.from(selectedIds)[0];
+    if (!id) return;
+    await fetch(`/api/products/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editForm) });
+    setShowEdit(false); setSelectedIds(new Set()); load();
   };
 
   const handleDelete = async () => {
-    if (!selectedId || !confirm('Удалить товар?')) return;
-    await fetch(`/api/products/${selectedId}`, { method: 'DELETE' });
-    setSelectedId(null); load();
+    if (!hasSelection || !confirm(`Удалить ${selectedIds.size} товар(ов)?`)) return;
+    for (const id of selectedIds) {
+      await fetch(`/api/products/${id}`, { method: 'DELETE' });
+    }
+    setSelectedIds(new Set()); load();
   };
 
   const handleMove = async () => {
-    if (!selectedId) return;
-    await fetch(`/api/products/${selectedId}/move`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(moveForm) });
+    if (!hasSelection) return;
+    await fetch('/api/products/bulk-move', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: Array.from(selectedIds), ...moveForm })
+    });
     setMoveForm({ destination: DESTINATIONS[0], comment: '', date: new Date().toISOString().split('T')[0] });
-    setShowMove(false); setSelectedId(null); load();
+    setShowMove(false); setSelectedIds(new Set()); load();
   };
 
   const openEdit = () => {
-    const p = products.find(x => x.id === selectedId);
+    const id = Array.from(selectedIds)[0];
+    const p = products.find(x => x.id === id);
     if (!p) return;
     setEditForm({ name: p.name, imei: p.imei || '', price: String(p.price), supplier: p.supplier || '', warehouse: p.warehouse, category: p.category });
     setShowEdit(true);
   };
 
-  const exportCSV = () => { window.open('/api/export/products', '_blank'); };
-
-  const sel = selectedId ? products.find(p => p.id === selectedId) : null;
+  const exportExcel = async (onlySelected: boolean) => {
+    const ids = onlySelected ? Array.from(selectedIds) : [];
+    const res = await fetch('/api/export/excel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'products.xlsx'; a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
-        <h1 style={{ margin: 0 }}>Товары</h1>
+        <h1 style={{ margin: 0 }}>Товары {hasSelection && <span style={{ fontSize: '14px', fontWeight: 300, color: 'var(--text-secondary)' }}>({selectedIds.size} выбрано)</span>}</h1>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-          <button className="btn btn-secondary" onClick={exportCSV}><Download size={14} /> Экспорт</button>
-          {selectedId && <button className="btn btn-secondary" onClick={openEdit}><Pencil size={14} /> Редактировать</button>}
-          {selectedId && <button className="btn" style={{ background: 'rgba(255,59,48,0.08)', color: 'var(--system-red)' }} onClick={handleDelete}><Trash2 size={14} /> Удалить</button>}
-          <button className="btn" disabled={!selectedId} onClick={() => setShowMove(true)} style={{ background: selectedId ? 'var(--system-orange)' : 'var(--system-gray-5)', color: selectedId ? '#fff' : 'var(--system-gray)', cursor: selectedId ? 'pointer' : 'not-allowed', opacity: selectedId ? 1 : 0.5 }}>
+          <button className="btn btn-secondary" onClick={() => exportExcel(false)}><Download size={14} /> Все Excel</button>
+          {hasSelection && <button className="btn btn-secondary" onClick={() => exportExcel(true)}><Download size={14} /> Выбранные</button>}
+          {selectedIds.size === 1 && <button className="btn btn-secondary" onClick={openEdit}><Pencil size={14} /> Редактировать</button>}
+          {hasSelection && <button className="btn" style={{ background: 'rgba(255,59,48,0.08)', color: 'var(--system-red)' }} onClick={handleDelete}><Trash2 size={14} /> Удалить</button>}
+          <button className="btn" disabled={!hasSelection} onClick={() => setShowMove(true)} style={{ background: hasSelection ? 'var(--system-orange)' : 'var(--system-gray-5)', color: hasSelection ? '#fff' : 'var(--system-gray)', cursor: hasSelection ? 'pointer' : 'not-allowed', opacity: hasSelection ? 1 : 0.5 }}>
             Изменить статус
           </button>
           <button className="btn btn-primary" onClick={() => setShowAdd(true)}><Plus size={16} /> Добавить</button>
         </div>
       </div>
 
-      {/* Search + Filters */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ flex: 1, minWidth: '200px', display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius-sm)', padding: '8px 10px' }}>
           <Search size={16} color="var(--system-gray)" />
@@ -136,12 +165,13 @@ export default function Inventory() {
         </div>
       </div>
 
-      {/* Table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
             <thead><tr style={{ background: 'var(--bg-primary)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
-              <th style={{ padding: '10px 14px', fontWeight: 400, width: '36px' }}></th>
+              <th style={{ padding: '10px 14px', fontWeight: 400, width: '36px' }}>
+                <input type="checkbox" checked={allSelected} onChange={toggleAll} style={{ width: '16px', height: '16px', accentColor: 'var(--accent)', cursor: 'pointer' }} />
+              </th>
               <th style={{ padding: '10px 14px', fontWeight: 400 }}>Название</th>
               <th style={{ padding: '10px 14px', fontWeight: 400 }}>IMEI</th>
               <th style={{ padding: '10px 14px', fontWeight: 400 }}>Цена</th>
@@ -155,9 +185,9 @@ export default function Inventory() {
               {filtered.length === 0 ? <tr><td colSpan={9} style={{ padding: '36px', textAlign: 'center', color: 'var(--text-secondary)' }}>Товары не найдены</td></tr> :
                 filtered.map(p => {
                   const c = STATUS_COLORS[p.status] || STATUS_COLORS['Активен'];
-                  const isSel = selectedId === p.id;
+                  const isSel = selectedIds.has(p.id);
                   return (
-                    <tr key={p.id} onClick={() => setSelectedId(isSel ? null : p.id)} style={{ borderBottom: '1px solid var(--border-color)', background: isSel ? 'rgba(52,199,89,0.05)' : 'transparent', cursor: 'pointer', transition: 'background 0.15s' }}>
+                    <tr key={p.id} onClick={() => toggleSelect(p.id)} style={{ borderBottom: '1px solid var(--border-color)', background: isSel ? 'rgba(52,199,89,0.05)' : 'transparent', cursor: 'pointer', transition: 'background 0.15s' }}>
                       <td style={{ padding: '10px 14px' }}><input type="checkbox" checked={isSel} readOnly style={{ width: '16px', height: '16px', accentColor: 'var(--accent)', cursor: 'pointer' }} /></td>
                       <td style={{ padding: '10px 14px', fontWeight: 400 }}>{p.name}</td>
                       <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: '12px' }}>{p.imei || '-'}</td>
@@ -175,21 +205,17 @@ export default function Inventory() {
         </div>
       </div>
 
-      {/* Modal: Add */}
       {showAdd && <Modal title="Добавить товар" onClose={() => setShowAdd(false)}>
         <FormFields form={addForm} setForm={setAddForm} suppliers={suppliers} />
         <ModalButtons onCancel={() => setShowAdd(false)} onConfirm={handleAdd} confirmLabel="Добавить" />
       </Modal>}
 
-      {/* Modal: Edit */}
       {showEdit && <Modal title="Редактировать товар" onClose={() => setShowEdit(false)}>
         <FormFields form={editForm} setForm={setEditForm} suppliers={suppliers} />
         <ModalButtons onCancel={() => setShowEdit(false)} onConfirm={handleEdit} confirmLabel="Сохранить" />
       </Modal>}
 
-      {/* Modal: Move */}
-      {showMove && selectedId && <Modal title="Изменить статус" onClose={() => setShowMove(false)}>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '16px' }}>{sel?.name}</p>
+      {showMove && hasSelection && <Modal title={`Изменить статус (${selectedIds.size} шт)`} onClose={() => setShowMove(false)}>
         <div className="input-group"><label className="input-label">Дата</label><input className="input-field" type="date" value={moveForm.date} onChange={e => setMoveForm({ ...moveForm, date: e.target.value })} /></div>
         <div className="input-group"><label className="input-label">Куда</label><select className="input-field" value={moveForm.destination} onChange={e => setMoveForm({ ...moveForm, destination: e.target.value })}>{DESTINATIONS.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
         <div className="input-group"><label className="input-label">Комментарий</label><textarea className="input-field" rows={2} value={moveForm.comment} onChange={e => setMoveForm({ ...moveForm, comment: e.target.value })} style={{ resize: 'vertical', fontFamily: 'Outfit, sans-serif' }} /></div>
@@ -219,7 +245,7 @@ function FormFields({ form, setForm, suppliers }: { form: any; setForm: (f: any)
     <div className="input-group"><label className="input-label">Поставщик</label>
       <select className="input-field" value={form.supplier} onChange={e => setForm({ ...form, supplier: e.target.value })}>
         <option value="">-- выбрать --</option>
-        {suppliers.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+        {suppliers.map((s: any) => <option key={s.id} value={s.name}>{s.name}</option>)}
       </select>
     </div>
     <div className="input-group"><label className="input-label">Склад</label><select className="input-field" value={form.warehouse} onChange={e => setForm({ ...form, warehouse: e.target.value })}><option value="Василий">Василий</option><option value="Анна">Анна</option></select></div>
