@@ -24,12 +24,7 @@ const Sidebar = () => {
 
   return (
     <div className="sidebar">
-      <div style={{ padding: '0 10px 14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <div style={{ width: '28px', height: '28px', borderRadius: '7px', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <PackageOpen size={16} />
-        </div>
-      </div>
-      <div className="sidebar-title">Меню</div>
+      <div className="sidebar-title" style={{ marginTop: '4px' }}>Меню</div>
       <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} end>
         <LayoutDashboard className="icon" size={18} /> Сводка
       </NavLink>
@@ -80,7 +75,12 @@ const Sidebar = () => {
 
 const Header = () => (
   <div className="header">
-    <span></span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div style={{ width: '28px', height: '28px', borderRadius: '7px', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <PackageOpen size={16} />
+      </div>
+      <span style={{ fontSize: '15px', fontWeight: 500 }}>СКЛАД</span>
+    </div>
     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', borderRadius: 'var(--border-radius-sm)', background: 'var(--system-gray-6)', cursor: 'pointer', transition: 'background 0.15s' }}>
         <User size={16} color="var(--text-secondary)" />
