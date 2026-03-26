@@ -2,13 +2,19 @@
   "name": "wms-system",
   "description": "Склад — система учёта товаров",
   "dependencies": {
+    "@prisma/client": "^6.19.2",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "prisma": "^6.19.2",
     "socket.io": "^4.8.3",
     "uuid": "^13.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "concurrently": "^9.2.1",
     "nodemon": "^3.1.14"
   },
@@ -16,7 +22,8 @@
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
     "server:dev": "nodemon server.js",
     "client:dev": "cd client && npm run dev",
-    "build": "cd client && npm install && npm run build",
-    "start": "node server.js"
+    "build": "npx prisma generate && cd client && npm install && npm run build",
+    "start": "npx prisma db push && node server.js",
+    "postinstall": "npx prisma generate"
   }
 }

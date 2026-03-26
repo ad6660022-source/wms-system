@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Search, RotateCcw } from 'lucide-react';
 import { io } from 'socket.io-client';
+import { api } from '../App';
+import { useToast } from '../components/Toast';
 
 const socket = io('/', { transports: ['websocket'] });
 
 export default function Sold() {
+  const { show: toast } = useToast();
   const [products, setProducts] = useState<any[]>([]);
   const [search, setSearch] = useState('');
 
   const load = () => {
-    fetch('/api/products').then(r => r.json()).then(d => {
+    api('/api/products').then(r => r.json()).then(d => {
       if (Array.isArray(d)) setProducts(d.filter((p: any) => p.status === 'Продано'));
     }).catch(() => {});
   };
@@ -17,7 +20,9 @@ export default function Sold() {
 
   const handleReturn = async (id: string) => {
     if (!confirm('Вернуть товар на склад?')) return;
-    await fetch(`/api/products/${id}/return`, { method: 'POST' });
+    const res = await api(`/api/products/${id}/return`, { method: 'POST' });
+    if (res.ok) toast('Товар возвращен на склад', 'info');
+    else toast('Ошибка возврата', 'error');
     load();
   };
 

@@ -1,23 +1,21 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Plus, Search, ArrowUpDown, X, Pencil, Trash2, Download } from 'lucide-react';
 import { io } from 'socket.io-client';
+import { api, STATUS_COLORS } from '../App';
+import { useToast } from '../components/Toast';
 
 const socket = io('/', { transports: ['websocket'] });
 
 type Product = { id: string; name: string; imei: string | null; price: number; supplier: string | null; warehouse: string; category: string; status: string; updatedAt: string; };
 
-const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
-  'Активен': { bg: 'rgba(52,199,89,0.1)', text: '#34C759' },
-  'Архив': { bg: 'rgba(142,142,147,0.1)', text: '#8E8E93' },
-  'Брак': { bg: 'rgba(255,59,48,0.1)', text: '#FF3B30' },
-  'Продано': { bg: 'rgba(255,59,48,0.1)', text: '#FF3B30' },
-};
 const DESTINATIONS = ['Продан на МВИДЕО', 'Потеря', 'Брак', 'Продан Василию'];
-const CATEGORIES = ['Без категории', 'Телефоны', 'Аксессуары', 'Ноутбуки', 'Планшеты', 'Другое'];
 
 export default function Inventory() {
+  const { show: toast } = useToast();
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [warehouses, setWarehouses] = useState<string[]>(['Василий', 'Анна']);
+  const [categories, setCategories] = useState<string[]>(['Без категории', 'Телефоны', 'Аксессуары', 'Ноутбуки', 'Планшеты', 'Другое']);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('updatedAt');
   const [sortOpen, setSortOpen] = useState(false);
@@ -27,15 +25,17 @@ export default function Inventory() {
   const [showEdit, setShowEdit] = useState(false);
   const [filterWh, setFilterWh] = useState('');
   const [filterCat, setFilterCat] = useState('');
-  const [addForm, setAddForm] = useState({ name: '', imei: '', price: '', supplier: '', warehouse: 'Василий', category: 'Без категории' });
-  const [editForm, setEditForm] = useState({ name: '', imei: '', price: '', supplier: '', warehouse: 'Василий', category: 'Без категории' });
+  const [addForm, setAddForm] = useState({ name: '', imei: '', price: '', supplier: '', warehouse: '', category: '' });
+  const [editForm, setEditForm] = useState({ name: '', imei: '', price: '', supplier: '', warehouse: '', category: '' });
   const [moveForm, setMoveForm] = useState({ destination: DESTINATIONS[0], comment: '', date: new Date().toISOString().split('T')[0] });
 
   const load = () => {
-    fetch('/api/products').then(r => r.json()).then(d => { if (Array.isArray(d)) setProducts(d.filter((p: Product) => p.status !== 'Продано')); }).catch(() => {});
-    fetch('/api/suppliers').then(r => r.json()).then(d => { if (Array.isArray(d)) setSuppliers(d); }).catch(() => {});
+    api('/api/products').then(r => r.json()).then(d => { if (Array.isArray(d)) setProducts(d.filter((p: Product) => p.status !== 'Продано')); }).catch(() => {});
+    api('/api/suppliers').then(r => r.json()).then(d => { if (Array.isArray(d)) setSuppliers(d); }).catch(() => {});
+    api('/api/warehouses').then(r => r.json()).then(d => { if (Array.isArray(d)) { const ws = d.map((w:any)=>w.name); setWarehouses(ws); if(!addForm.warehouse) setAddForm(f=>({...f, warehouse: ws[0]||''})); } }).catch(() => {});
+    api('/api/categories').then(r => r.json()).then(d => { if (Array.isArray(d)) { const cs = d.map((c:any)=>c.name); setCategories(cs); if(!addForm.category) setAddForm(f=>({...f, category: cs[0]||''})); } }).catch(() => {});
   };
-  useEffect(() => { load(); socket.on('products:updated', load); return () => { socket.off('products:updated', load); }; }, []);
+  useEffect(() => { load(); socket.on('products:updated', load); socket.on('settings:updated', load); return () => { socket.off('products:updated', load); socket.off('settings:updated', load); }; }, []);
 
   const filtered = useMemo(() => {
     let list = products.filter(p => {
@@ -70,37 +70,36 @@ export default function Inventory() {
 
   const allSelected = filtered.length > 0 && selectedIds.size === filtered.length;
   const hasSelection = selectedIds.size > 0;
+  const totalSelectedValue = Array.from(selectedIds).reduce((sum, id) => { const p = products.find(x => x.id === id); return sum + (p ? p.price : 0); }, 0);
 
   const handleAdd = async () => {
     if (!addForm.name.trim()) return;
-    await fetch('/api/products', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(addForm) });
-    setAddForm({ name: '', imei: '', price: '', supplier: '', warehouse: 'Василий', category: 'Без категории' });
-    setShowAdd(false); load();
+    const res = await api('/api/products', { method: 'POST', body: JSON.stringify(addForm) });
+    if (res.ok) { toast('Товар добавлен'); setAddForm({ ...addForm, name: '', imei: '', price: '' }); setShowAdd(false); load(); } else toast('Ошибка', 'error');
   };
 
   const handleEdit = async () => {
     const id = Array.from(selectedIds)[0];
     if (!id) return;
-    await fetch(`/api/products/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editForm) });
-    setShowEdit(false); setSelectedIds(new Set()); load();
+    const res = await api(`/api/products/${id}`, { method: 'PUT', body: JSON.stringify(editForm) });
+    if (res.ok) { toast('Товар сохранён'); setShowEdit(false); setSelectedIds(new Set()); load(); } else toast('Ошибка', 'error');
   };
 
   const handleDelete = async () => {
     if (!hasSelection || !confirm(`Удалить ${selectedIds.size} товар(ов)?`)) return;
     for (const id of selectedIds) {
-      await fetch(`/api/products/${id}`, { method: 'DELETE' });
+      await api(`/api/products/${id}`, { method: 'DELETE' });
     }
+    toast(`Удалено ${selectedIds.size} шт`, 'info');
     setSelectedIds(new Set()); load();
   };
 
   const handleMove = async () => {
     if (!hasSelection) return;
-    await fetch('/api/products/bulk-move', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: Array.from(selectedIds), ...moveForm })
+    const res = await api('/api/products/bulk-move', {
+      method: 'POST', body: JSON.stringify({ ids: Array.from(selectedIds), ...moveForm })
     });
-    setMoveForm({ destination: DESTINATIONS[0], comment: '', date: new Date().toISOString().split('T')[0] });
-    setShowMove(false); setSelectedIds(new Set()); load();
+    if (res.ok) { toast('Статус изменён'); setMoveForm({ destination: DESTINATIONS[0], comment: '', date: new Date().toISOString().split('T')[0] }); setShowMove(false); setSelectedIds(new Set()); load(); } else toast('Ошибка', 'error');
   };
 
   const openEdit = () => {
@@ -113,17 +112,20 @@ export default function Inventory() {
 
   const exportExcel = async (onlySelected: boolean) => {
     const ids = onlySelected ? Array.from(selectedIds) : [];
-    const res = await fetch('/api/export/excel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = 'products.xlsx'; a.click();
-    URL.revokeObjectURL(url);
+    const res = await api('/api/export/excel', { method: 'POST', body: JSON.stringify({ ids }) });
+    if (res.ok) {
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'products.xlsx'; a.click();
+      URL.revokeObjectURL(url);
+      toast('Excel выгружен');
+    } else toast('Ошибка выгрузки', 'error');
   };
 
   return (
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
-        <h1 style={{ margin: 0 }}>Товары {hasSelection && <span style={{ fontSize: '14px', fontWeight: 300, color: 'var(--text-secondary)' }}>({selectedIds.size} выбрано)</span>}</h1>
+        <h1 style={{ margin: 0 }}>Товары {hasSelection && <span style={{ fontSize: '14px', fontWeight: 300, color: 'var(--text-secondary)' }}>({selectedIds.size} выбрано — {totalSelectedValue.toLocaleString('ru-RU')} P)</span>}</h1>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button className="btn btn-secondary" onClick={() => exportExcel(false)}><Download size={14} /> Все Excel</button>
           {hasSelection && <button className="btn btn-secondary" onClick={() => exportExcel(true)}><Download size={14} /> Выбранные</button>}
@@ -143,12 +145,11 @@ export default function Inventory() {
         </div>
         <select className="input-field" value={filterWh} onChange={e => setFilterWh(e.target.value)} style={{ padding: '8px 10px', fontSize: '13px', minWidth: '120px' }}>
           <option value="">Все склады</option>
-          <option value="Василий">Василий</option>
-          <option value="Анна">Анна</option>
+          {warehouses.map(w => <option key={w} value={w}>{w}</option>)}
         </select>
         <select className="input-field" value={filterCat} onChange={e => setFilterCat(e.target.value)} style={{ padding: '8px 10px', fontSize: '13px', minWidth: '140px' }}>
           <option value="">Все категории</option>
-          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         <div style={{ position: 'relative' }}>
           <button className="btn btn-secondary" onClick={() => setSortOpen(!sortOpen)}><ArrowUpDown size={14} /> Сорт.</button>
@@ -206,12 +207,12 @@ export default function Inventory() {
       </div>
 
       {showAdd && <Modal title="Добавить товар" onClose={() => setShowAdd(false)}>
-        <FormFields form={addForm} setForm={setAddForm} suppliers={suppliers} />
+        <FormFields form={addForm} setForm={setAddForm} suppliers={suppliers} warehouses={warehouses} categories={categories} />
         <ModalButtons onCancel={() => setShowAdd(false)} onConfirm={handleAdd} confirmLabel="Добавить" />
       </Modal>}
 
       {showEdit && <Modal title="Редактировать товар" onClose={() => setShowEdit(false)}>
-        <FormFields form={editForm} setForm={setEditForm} suppliers={suppliers} />
+        <FormFields form={editForm} setForm={setEditForm} suppliers={suppliers} warehouses={warehouses} categories={categories} />
         <ModalButtons onCancel={() => setShowEdit(false)} onConfirm={handleEdit} confirmLabel="Сохранить" />
       </Modal>}
 
@@ -237,7 +238,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-function FormFields({ form, setForm, suppliers }: { form: any; setForm: (f: any) => void; suppliers: any[] }) {
+function FormFields({ form, setForm, suppliers, warehouses, categories }: { form: any; setForm: (f: any) => void; suppliers: any[]; warehouses: string[]; categories: string[] }) {
   return <>
     <div className="input-group"><label className="input-label">Название</label><input className="input-field" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
     <div className="input-group"><label className="input-label">IMEI</label><input className="input-field" value={form.imei} onChange={e => setForm({ ...form, imei: e.target.value })} /></div>
@@ -248,8 +249,8 @@ function FormFields({ form, setForm, suppliers }: { form: any; setForm: (f: any)
         {suppliers.map((s: any) => <option key={s.id} value={s.name}>{s.name}</option>)}
       </select>
     </div>
-    <div className="input-group"><label className="input-label">Склад</label><select className="input-field" value={form.warehouse} onChange={e => setForm({ ...form, warehouse: e.target.value })}><option value="Василий">Василий</option><option value="Анна">Анна</option></select></div>
-    <div className="input-group"><label className="input-label">Категория</label><select className="input-field" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>{['Без категории', 'Телефоны', 'Аксессуары', 'Ноутбуки', 'Планшеты', 'Другое'].map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+    <div className="input-group"><label className="input-label">Склад</label><select className="input-field" value={form.warehouse} onChange={e => setForm({ ...form, warehouse: e.target.value })}>{warehouses.map(w => <option key={w} value={w}>{w}</option>)}</select></div>
+    <div className="input-group"><label className="input-label">Категория</label><select className="input-field" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>{categories.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
   </>;
 }
 

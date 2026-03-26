@@ -1,26 +1,33 @@
 import { useEffect, useState } from 'react';
 import { Plus, Trash2, X } from 'lucide-react';
 import { io } from 'socket.io-client';
+import { api } from '../App';
+import { useToast } from '../components/Toast';
 
 const socket = io('/', { transports: ['websocket'] });
 
 export default function Suppliers() {
+  const { show: toast } = useToast();
   const [list, setList] = useState<any[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: '', phone: '', note: '' });
 
-  const load = () => { fetch('/api/suppliers').then(r => r.json()).then(d => { if (Array.isArray(d)) setList(d); }).catch(() => {}); };
+  const load = () => { api('/api/suppliers').then(r => r.json()).then(d => { if (Array.isArray(d)) setList(d); }).catch(() => {}); };
   useEffect(() => { load(); socket.on('suppliers:updated', load); return () => { socket.off('suppliers:updated', load); }; }, []);
 
   const handleAdd = async () => {
     if (!form.name.trim()) return;
-    await fetch('/api/suppliers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
-    setForm({ name: '', phone: '', note: '' }); setShowAdd(false); load();
+    const res = await api('/api/suppliers', { method: 'POST', body: JSON.stringify(form) });
+    if (res.ok) { toast('Поставщик добавлен'); setForm({ name: '', phone: '', note: '' }); setShowAdd(false); load(); }
+    else toast('Ошибка', 'error');
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm('Удалить поставщика?')) return;
-    await fetch(`/api/suppliers/${id}`, { method: 'DELETE' }); load();
+    const res = await api(`/api/suppliers/${id}`, { method: 'DELETE' });
+    if (res.ok) toast('Поставщик удален', 'info');
+    else toast('Ошибка', 'error');
+    load();
   };
 
   return (

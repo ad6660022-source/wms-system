@@ -1,0 +1,66 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Product {
+  id        String     @id @default(uuid())
+  name      String
+  imei      String?
+  price     Float      @default(0)
+  supplier  String?
+  warehouse String     @default("Василий")
+  category  String     @default("Без категории")
+  status    String     @default("Активен")
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  movements Movement[]
+}
+
+model Movement {
+  id          String   @id @default(uuid())
+  productId   String?
+  productName String
+  destination String
+  comment     String?
+  date        DateTime @default(now())
+  createdAt   DateTime @default(now())
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+}
+
+model Supplier {
+  id    String @id @default(uuid())
+  name  String
+  phone String @default("")
+  note  String @default("")
+}
+
+model AuditLog {
+  id      String   @id @default(uuid())
+  action  String
+  details String
+  date    DateTime @default(now())
+}
+
+model Warehouse {
+  id   String @id @default(uuid())
+  name String @unique
+}
+
+model Category {
+  id   String @id @default(uuid())
+  name String @unique
+}
+
+model Setting {
+  id    String @id @default(uuid())
+  key   String @unique
+  value String
+}
