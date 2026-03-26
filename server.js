@@ -19,9 +19,9 @@ loadEnvFile(path.join(__dirname, '.env'));
 app.use(cors());
 app.use(express.json());
 
-const config = getRuntimeConfig();
 const FALLBACK_JWT_SECRET = 'sklad-default-insecure-secret-change-me';
 const FALLBACK_FIRST_ADMIN_PASSWORD = 'admin12345';
+const config = getRuntimeConfig();
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
