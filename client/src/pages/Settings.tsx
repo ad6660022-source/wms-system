@@ -4,6 +4,14 @@ import { useToast } from '../components/Toast';
 
 const token = () => localStorage.getItem('sklToken') || '';
 const api = (url: string, opts: RequestInit = {}) => fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}`, ...((opts as any).headers || {}) } });
+const readApiError = async (res: Response, fallback: string) => {
+  try {
+    const data = await res.json();
+    return typeof data?.error === 'string' ? data.error : fallback;
+  } catch {
+    return fallback;
+  }
+};
 
 export default function Settings() {
   const { show: toast } = useToast();
@@ -21,26 +29,26 @@ export default function Settings() {
   const addWarehouse = async () => {
     if (!whName.trim()) return;
     const res = await api('/api/warehouses', { method: 'POST', body: JSON.stringify({ name: whName }) });
-    if (res.ok) { toast('Склад добавлен'); setWhName(''); loadWarehouses(); } else toast('Ошибка', 'error');
+    if (res.ok) { toast('Склад добавлен'); setWhName(''); loadWarehouses(); } else toast(await readApiError(res, 'Ошибка'), 'error');
   };
   const delWarehouse = async (id: string) => {
     const res = await api(`/api/warehouses/${id}`, { method: 'DELETE' });
-    if (res.ok) { toast('Склад удалён', 'info'); loadWarehouses(); } else toast('Нельзя удалить', 'error');
+    if (res.ok) { toast('Склад удалён', 'info'); loadWarehouses(); } else toast(await readApiError(res, 'Нельзя удалить склад'), 'error');
   };
   const addCategory = async () => {
     if (!catName.trim()) return;
     const res = await api('/api/categories', { method: 'POST', body: JSON.stringify({ name: catName }) });
-    if (res.ok) { toast('Категория добавлена'); setCatName(''); loadCategories(); } else toast('Ошибка', 'error');
+    if (res.ok) { toast('Категория добавлена'); setCatName(''); loadCategories(); } else toast(await readApiError(res, 'Ошибка'), 'error');
   };
   const delCategory = async (id: string) => {
     const res = await api(`/api/categories/${id}`, { method: 'DELETE' });
-    if (res.ok) { toast('Категория удалена', 'info'); loadCategories(); } else toast('Ошибка', 'error');
+    if (res.ok) { toast('Категория удалена', 'info'); loadCategories(); } else toast(await readApiError(res, 'Ошибка'), 'error');
   };
   const changePassword = async () => {
     if (newPwd !== confirmPwd) { toast('Пароли не совпадают', 'error'); return; }
-    if (newPwd.length < 4) { toast('Минимум 4 символа', 'error'); return; }
+    if (newPwd.trim().length < 8) { toast('Минимум 8 символов', 'error'); return; }
     const res = await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ newPassword: newPwd }) });
-    if (res.ok) { toast('Пароль изменён'); setNewPwd(''); setConfirmPwd(''); } else toast('Ошибка', 'error');
+    if (res.ok) { toast('Пароль изменён'); setNewPwd(''); setConfirmPwd(''); } else toast(await readApiError(res, 'Ошибка'), 'error');
   };
 
   const Section = ({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) => (
@@ -88,6 +96,7 @@ export default function Settings() {
       </Section>
 
       <Section icon={<KeyRound size={18} />} title="Смена пароля">
+        <p style={{ color: 'var(--text-secondary)', marginBottom: '12px', fontSize: '13px' }}>Используй пароль не короче 8 символов.</p>
         <div className="input-group"><label className="input-label">Новый пароль</label><input className="input-field" type="password" value={newPwd} onChange={e => setNewPwd(e.target.value)} /></div>
         <div className="input-group"><label className="input-label">Подтверждение</label><input className="input-field" type="password" value={confirmPwd} onChange={e => setConfirmPwd(e.target.value)} /></div>
         <button className="btn btn-primary" onClick={changePassword}>Сохранить пароль</button>

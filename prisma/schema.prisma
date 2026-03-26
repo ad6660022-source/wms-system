@@ -19,6 +19,7 @@ model Product {
   warehouse String     @default("Василий")
   category  String     @default("Без категории")
   status    String     @default("Активен")
+  orderNumber String?
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
   movements Movement[]
@@ -28,6 +29,7 @@ model Movement {
   id          String   @id @default(uuid())
   productId   String?
   productName String
+  orderNumber String?
   destination String
   comment     String?
   date        DateTime @default(now())

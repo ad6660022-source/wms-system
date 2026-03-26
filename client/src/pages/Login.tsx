@@ -2,6 +2,15 @@ import { useState } from 'react';
 import { PackageOpen, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '../components/Toast';
 
+async function readApiError(res: Response, fallback: string) {
+  try {
+    const data = await res.json();
+    return typeof data?.error === 'string' ? data.error : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export default function Login({ onLogin }: { onLogin: (token: string) => void }) {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -13,7 +22,11 @@ export default function Login({ onLogin }: { onLogin: (token: string) => void })
     setLoading(true);
     try {
       const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
-      if (!res.ok) { toast('Неверный пароль', 'error'); setLoading(false); return; }
+      if (!res.ok) {
+        toast(await readApiError(res, 'Ошибка входа'), 'error');
+        setLoading(false);
+        return;
+      }
       const { token } = await res.json();
       localStorage.setItem('sklToken', token);
       onLogin(token);
@@ -52,7 +65,7 @@ export default function Login({ onLogin }: { onLogin: (token: string) => void })
             {loading ? 'Вход...' : 'Войти'}
           </button>
         </form>
-        <p style={{ marginTop: '16px', fontSize: '11px', color: 'var(--text-secondary)' }}>По умолчанию: admin123</p>
+        <p style={{ marginTop: '16px', fontSize: '11px', color: 'var(--text-secondary)' }}>Первый пароль задаётся через `FIRST_ADMIN_PASSWORD` на сервере.</p>
       </div>
     </div>
   );

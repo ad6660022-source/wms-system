@@ -6,9 +6,18 @@ import { useToast } from '../components/Toast';
 
 const socket = io('/', { transports: ['websocket'] });
 
-type Product = { id: string; name: string; imei: string | null; price: number; supplier: string | null; warehouse: string; category: string; status: string; updatedAt: string; };
+type Product = { id: string; name: string; imei: string | null; price: number; supplier: string | null; warehouse: string; category: string; status: string; orderNumber?: string | null; updatedAt: string; };
 
 const DESTINATIONS = ['Продан на МВИДЕО', 'Потеря', 'Брак', 'Продан Василию'];
+const isSoldDestination = (destination: string) => destination.startsWith('Продан');
+const readApiError = async (res: Response, fallback: string) => {
+  try {
+    const data = await res.json();
+    return typeof data?.error === 'string' ? data.error : fallback;
+  } catch {
+    return fallback;
+  }
+};
 
 export default function Inventory() {
   const { show: toast } = useToast();
@@ -27,7 +36,7 @@ export default function Inventory() {
   const [filterCat, setFilterCat] = useState('');
   const [addForm, setAddForm] = useState({ name: '', imei: '', price: '', supplier: '', warehouse: '', category: '' });
   const [editForm, setEditForm] = useState({ name: '', imei: '', price: '', supplier: '', warehouse: '', category: '' });
-  const [moveForm, setMoveForm] = useState({ destination: DESTINATIONS[0], comment: '', date: new Date().toISOString().split('T')[0] });
+  const [moveForm, setMoveForm] = useState({ destination: DESTINATIONS[0], orderNumber: '', comment: '', date: new Date().toISOString().split('T')[0] });
 
   const load = () => {
     api('/api/products').then(r => r.json()).then(d => { if (Array.isArray(d)) setProducts(d.filter((p: Product) => p.status !== 'Продано')); }).catch(() => {});
@@ -75,20 +84,25 @@ export default function Inventory() {
   const handleAdd = async () => {
     if (!addForm.name.trim()) return;
     const res = await api('/api/products', { method: 'POST', body: JSON.stringify(addForm) });
-    if (res.ok) { toast('Товар добавлен'); setAddForm({ ...addForm, name: '', imei: '', price: '' }); setShowAdd(false); load(); } else toast('Ошибка', 'error');
+    if (res.ok) { toast('Товар добавлен'); setAddForm({ ...addForm, name: '', imei: '', price: '' }); setShowAdd(false); load(); } else toast(await readApiError(res, 'Ошибка'), 'error');
   };
 
   const handleEdit = async () => {
     const id = Array.from(selectedIds)[0];
     if (!id) return;
     const res = await api(`/api/products/${id}`, { method: 'PUT', body: JSON.stringify(editForm) });
-    if (res.ok) { toast('Товар сохранён'); setShowEdit(false); setSelectedIds(new Set()); load(); } else toast('Ошибка', 'error');
+    if (res.ok) { toast('Товар сохранён'); setShowEdit(false); setSelectedIds(new Set()); load(); } else toast(await readApiError(res, 'Ошибка'), 'error');
   };
 
   const handleDelete = async () => {
     if (!hasSelection || !confirm(`Удалить ${selectedIds.size} товар(ов)?`)) return;
     for (const id of selectedIds) {
-      await api(`/api/products/${id}`, { method: 'DELETE' });
+      const res = await api(`/api/products/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        toast(await readApiError(res, 'Ошибка удаления'), 'error');
+        load();
+        return;
+      }
     }
     toast(`Удалено ${selectedIds.size} шт`, 'info');
     setSelectedIds(new Set()); load();
@@ -96,10 +110,14 @@ export default function Inventory() {
 
   const handleMove = async () => {
     if (!hasSelection) return;
+    if (isSoldDestination(moveForm.destination) && !moveForm.orderNumber.trim()) {
+      toast('Укажите номер заказа', 'error');
+      return;
+    }
     const res = await api('/api/products/bulk-move', {
       method: 'POST', body: JSON.stringify({ ids: Array.from(selectedIds), ...moveForm })
     });
-    if (res.ok) { toast('Статус изменён'); setMoveForm({ destination: DESTINATIONS[0], comment: '', date: new Date().toISOString().split('T')[0] }); setShowMove(false); setSelectedIds(new Set()); load(); } else toast('Ошибка', 'error');
+    if (res.ok) { toast('Статус изменён'); setMoveForm({ destination: DESTINATIONS[0], orderNumber: '', comment: '', date: new Date().toISOString().split('T')[0] }); setShowMove(false); setSelectedIds(new Set()); load(); } else toast(await readApiError(res, 'Ошибка'), 'error');
   };
 
   const openEdit = () => {
@@ -125,7 +143,7 @@ export default function Inventory() {
   return (
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
-        <h1 style={{ margin: 0 }}>Товары {hasSelection && <span style={{ fontSize: '14px', fontWeight: 300, color: 'var(--text-secondary)' }}>({selectedIds.size} выбрано — {totalSelectedValue.toLocaleString('ru-RU')} P)</span>}</h1>
+        <h1 style={{ margin: 0 }}>Товары {hasSelection && <span style={{ fontSize: '14px', fontWeight: 300, color: 'var(--text-secondary)' }}>({selectedIds.size} выбрано — {totalSelectedValue.toLocaleString('ru-RU')} ₽)</span>}</h1>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button className="btn btn-secondary" onClick={() => exportExcel(false)}><Download size={14} /> Все Excel</button>
           {hasSelection && <button className="btn btn-secondary" onClick={() => exportExcel(true)}><Download size={14} /> Выбранные</button>}
@@ -192,7 +210,7 @@ export default function Inventory() {
                       <td style={{ padding: '10px 14px' }}><input type="checkbox" checked={isSel} readOnly style={{ width: '16px', height: '16px', accentColor: 'var(--accent)', cursor: 'pointer' }} /></td>
                       <td style={{ padding: '10px 14px', fontWeight: 400 }}>{p.name}</td>
                       <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: '12px' }}>{p.imei || '-'}</td>
-                      <td style={{ padding: '10px 14px' }}>{Number(p.price).toLocaleString('ru-RU')} P</td>
+                      <td style={{ padding: '10px 14px' }}>{Number(p.price).toLocaleString('ru-RU')} ₽</td>
                       <td style={{ padding: '10px 14px' }}>{p.supplier || '-'}</td>
                       <td style={{ padding: '10px 14px' }}>{p.warehouse}</td>
                       <td style={{ padding: '10px 14px', fontSize: '12px' }}>{p.category}</td>
@@ -219,6 +237,12 @@ export default function Inventory() {
       {showMove && hasSelection && <Modal title={`Изменить статус (${selectedIds.size} шт)`} onClose={() => setShowMove(false)}>
         <div className="input-group"><label className="input-label">Дата</label><input className="input-field" type="date" value={moveForm.date} onChange={e => setMoveForm({ ...moveForm, date: e.target.value })} /></div>
         <div className="input-group"><label className="input-label">Куда</label><select className="input-field" value={moveForm.destination} onChange={e => setMoveForm({ ...moveForm, destination: e.target.value })}>{DESTINATIONS.map(d => <option key={d} value={d}>{d}</option>)}</select></div>
+        {isSoldDestination(moveForm.destination) && (
+          <div className="input-group">
+            <label className="input-label">Номер заказа</label>
+            <input className="input-field" value={moveForm.orderNumber} onChange={e => setMoveForm({ ...moveForm, orderNumber: e.target.value })} placeholder="Например, 12345" />
+          </div>
+        )}
         <div className="input-group"><label className="input-label">Комментарий</label><textarea className="input-field" rows={2} value={moveForm.comment} onChange={e => setMoveForm({ ...moveForm, comment: e.target.value })} style={{ resize: 'vertical', fontFamily: 'Outfit, sans-serif' }} /></div>
         <ModalButtons onCancel={() => setShowMove(false)} onConfirm={handleMove} confirmLabel="Подтвердить" />
       </Modal>}
