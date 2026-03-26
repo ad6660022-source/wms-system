@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Search, ArrowUpDown, X, Pencil, Trash2, Download } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { api, STATUS_COLORS } from '../App';
@@ -6,10 +6,25 @@ import { useToast } from '../components/Toast';
 
 const socket = io('/', { transports: ['websocket'] });
 
-type Product = { id: string; name: string; imei: string | null; price: number; supplier: string | null; warehouse: string; category: string; status: string; orderNumber?: string | null; updatedAt: string; };
+type Product = {
+  id: string;
+  name: string;
+  imei: string | null;
+  price: number;
+  salePrice?: number | null;
+  supplier: string | null;
+  warehouse: string;
+  category: string;
+  status: string;
+  orderNumber?: string | null;
+  createdAt?: string;
+  updatedAt: string;
+};
 
-const DESTINATIONS = ['Продан на МВИДЕО', 'Потеря', 'Брак', 'Продан Василию'];
+const DESTINATIONS = ['Продан', 'Продан на МВИДЕО', 'Потеря', 'Брак'];
 const isSoldDestination = (destination: string) => destination.startsWith('Продан');
+const isSoldStatus = (status: string) => status === 'Продан' || status === 'Продано';
+const formatCurrency = (value: number | string | null | undefined) => `${Number(value || 0).toLocaleString('ru-RU')} ₽`;
 const readApiError = async (res: Response, fallback: string) => {
   try {
     const data = await res.json();
@@ -21,6 +36,7 @@ const readApiError = async (res: Response, fallback: string) => {
 
 export default function Inventory() {
   const { show: toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [warehouses, setWarehouses] = useState<string[]>(['Василий', 'Анна']);
@@ -34,12 +50,12 @@ export default function Inventory() {
   const [showEdit, setShowEdit] = useState(false);
   const [filterWh, setFilterWh] = useState('');
   const [filterCat, setFilterCat] = useState('');
-  const [addForm, setAddForm] = useState({ name: '', imei: '', price: '', supplier: '', warehouse: '', category: '' });
-  const [editForm, setEditForm] = useState({ name: '', imei: '', price: '', supplier: '', warehouse: '', category: '' });
-  const [moveForm, setMoveForm] = useState({ destination: DESTINATIONS[0], orderNumber: '', comment: '', date: new Date().toISOString().split('T')[0] });
+  const [addForm, setAddForm] = useState({ name: '', imei: '', price: '', salePrice: '', supplier: '', warehouse: '', category: '' });
+  const [editForm, setEditForm] = useState({ name: '', imei: '', price: '', salePrice: '', supplier: '', warehouse: '', category: '' });
+  const [moveForm, setMoveForm] = useState({ destination: DESTINATIONS[0], orderNumber: '', salePrice: '', comment: '', date: new Date().toISOString().split('T')[0] });
 
   const load = () => {
-    api('/api/products').then(r => r.json()).then(d => { if (Array.isArray(d)) setProducts(d.filter((p: Product) => p.status !== 'Продано')); }).catch(() => {});
+    api('/api/products').then(r => r.json()).then(d => { if (Array.isArray(d)) setProducts(d.filter((p: Product) => !isSoldStatus(p.status))); }).catch(() => {});
     api('/api/suppliers').then(r => r.json()).then(d => { if (Array.isArray(d)) setSuppliers(d); }).catch(() => {});
     api('/api/warehouses').then(r => r.json()).then(d => { if (Array.isArray(d)) { const ws = d.map((w:any)=>w.name); setWarehouses(ws); if(!addForm.warehouse) setAddForm(f=>({...f, warehouse: ws[0]||''})); } }).catch(() => {});
     api('/api/categories').then(r => r.json()).then(d => { if (Array.isArray(d)) { const cs = d.map((c:any)=>c.name); setCategories(cs); if(!addForm.category) setAddForm(f=>({...f, category: cs[0]||''})); } }).catch(() => {});
@@ -49,7 +65,18 @@ export default function Inventory() {
   const filtered = useMemo(() => {
     let list = products.filter(p => {
       const q = search.toLowerCase();
-      const matchSearch = !q || p.name.toLowerCase().includes(q) || (p.imei && p.imei.toLowerCase().includes(q)) || p.status.toLowerCase().includes(q);
+      const matchSearch = !q || [
+        p.name,
+        p.imei,
+        p.status,
+        p.supplier,
+        p.warehouse,
+        p.category,
+        String(p.price ?? ''),
+        String(p.salePrice ?? ''),
+        new Date(p.updatedAt).toLocaleDateString('ru-RU'),
+        p.updatedAt,
+      ].some(value => value && String(value).toLowerCase().includes(q));
       const matchWh = !filterWh || p.warehouse === filterWh;
       const matchCat = !filterCat || p.category === filterCat;
       return matchSearch && matchWh && matchCat;
@@ -84,7 +111,7 @@ export default function Inventory() {
   const handleAdd = async () => {
     if (!addForm.name.trim()) return;
     const res = await api('/api/products', { method: 'POST', body: JSON.stringify(addForm) });
-    if (res.ok) { toast('Товар добавлен'); setAddForm({ ...addForm, name: '', imei: '', price: '' }); setShowAdd(false); load(); } else toast(await readApiError(res, 'Ошибка'), 'error');
+    if (res.ok) { toast('Товар добавлен'); setAddForm({ ...addForm, name: '', imei: '', price: '', salePrice: '' }); setShowAdd(false); load(); } else toast(await readApiError(res, 'Ошибка'), 'error');
   };
 
   const handleEdit = async () => {
@@ -117,15 +144,28 @@ export default function Inventory() {
     const res = await api('/api/products/bulk-move', {
       method: 'POST', body: JSON.stringify({ ids: Array.from(selectedIds), ...moveForm })
     });
-    if (res.ok) { toast('Статус изменён'); setMoveForm({ destination: DESTINATIONS[0], orderNumber: '', comment: '', date: new Date().toISOString().split('T')[0] }); setShowMove(false); setSelectedIds(new Set()); load(); } else toast(await readApiError(res, 'Ошибка'), 'error');
+    if (res.ok) { toast('Статус изменён'); setMoveForm({ destination: DESTINATIONS[0], orderNumber: '', salePrice: '', comment: '', date: new Date().toISOString().split('T')[0] }); setShowMove(false); setSelectedIds(new Set()); load(); } else toast(await readApiError(res, 'Ошибка'), 'error');
   };
 
   const openEdit = () => {
     const id = Array.from(selectedIds)[0];
     const p = products.find(x => x.id === id);
     if (!p) return;
-    setEditForm({ name: p.name, imei: p.imei || '', price: String(p.price), supplier: p.supplier || '', warehouse: p.warehouse, category: p.category });
+    setEditForm({ name: p.name, imei: p.imei || '', price: String(p.price), salePrice: p.salePrice !== null && p.salePrice !== undefined ? String(p.salePrice) : '', supplier: p.supplier || '', warehouse: p.warehouse, category: p.category });
     setShowEdit(true);
+  };
+
+  const openMove = () => {
+    if (!hasSelection) return;
+    const firstProduct = products.find(product => product.id === Array.from(selectedIds)[0]);
+    setMoveForm({
+      destination: DESTINATIONS[0],
+      orderNumber: '',
+      salePrice: firstProduct?.salePrice !== null && firstProduct?.salePrice !== undefined ? String(firstProduct.salePrice) : '',
+      comment: '',
+      date: new Date().toISOString().split('T')[0]
+    });
+    setShowMove(true);
   };
 
   const exportExcel = async (onlySelected: boolean) => {
@@ -140,16 +180,58 @@ export default function Inventory() {
     } else toast('Ошибка выгрузки', 'error');
   };
 
+  const downloadTemplate = async () => {
+    const res = await api('/api/export/import-template');
+    if (!res.ok) {
+      toast(await readApiError(res, 'Ошибка шаблона'), 'error');
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'product-import-template.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('Шаблон выгружен');
+  };
+
+  const handleImportClick = () => fileInputRef.current?.click();
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const buffer = await file.arrayBuffer();
+    const fileData = Array.from(new Uint8Array(buffer));
+    const res = await api('/api/import/excel', { method: 'POST', body: JSON.stringify({ fileData }) });
+    if (!res.ok) {
+      toast(await readApiError(res, 'Ошибка импорта'), 'error');
+      event.target.value = '';
+      return;
+    }
+    const data = await res.json();
+    const errors = Array.isArray(data?.errors) ? data.errors : [];
+    toast(`Импортировано: ${data?.importedCount || 0}${errors.length ? `, ошибок: ${errors.length}` : ''}`, errors.length ? 'info' : 'success');
+    if (errors.length) {
+      console.warn('Excel import errors', errors);
+    }
+    load();
+    event.target.value = '';
+  };
+
   return (
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
         <h1 style={{ margin: 0 }}>Товары {hasSelection && <span style={{ fontSize: '14px', fontWeight: 300, color: 'var(--text-secondary)' }}>({selectedIds.size} выбрано — {totalSelectedValue.toLocaleString('ru-RU')} ₽)</span>}</h1>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleImportFile} style={{ display: 'none' }} />
+          <button className="btn btn-secondary" onClick={downloadTemplate}><Download size={14} /> Шаблон</button>
+          <button className="btn btn-secondary" onClick={handleImportClick}><Download size={14} /> Импорт Excel</button>
           <button className="btn btn-secondary" onClick={() => exportExcel(false)}><Download size={14} /> Все Excel</button>
           {hasSelection && <button className="btn btn-secondary" onClick={() => exportExcel(true)}><Download size={14} /> Выбранные</button>}
           {selectedIds.size === 1 && <button className="btn btn-secondary" onClick={openEdit}><Pencil size={14} /> Редактировать</button>}
           {hasSelection && <button className="btn" style={{ background: 'rgba(255,59,48,0.08)', color: 'var(--system-red)' }} onClick={handleDelete}><Trash2 size={14} /> Удалить</button>}
-          <button className="btn" disabled={!hasSelection} onClick={() => setShowMove(true)} style={{ background: hasSelection ? 'var(--system-orange)' : 'var(--system-gray-5)', color: hasSelection ? '#fff' : 'var(--system-gray)', cursor: hasSelection ? 'pointer' : 'not-allowed', opacity: hasSelection ? 1 : 0.5 }}>
+          <button className="btn" disabled={!hasSelection} onClick={openMove} style={{ background: hasSelection ? 'var(--system-orange)' : 'var(--system-gray-5)', color: hasSelection ? '#fff' : 'var(--system-gray)', cursor: hasSelection ? 'pointer' : 'not-allowed', opacity: hasSelection ? 1 : 0.5 }}>
             Изменить статус
           </button>
           <button className="btn btn-primary" onClick={() => setShowAdd(true)}><Plus size={16} /> Добавить</button>
@@ -159,7 +241,7 @@ export default function Inventory() {
       <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ flex: 1, minWidth: '200px', display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius-sm)', padding: '8px 10px' }}>
           <Search size={16} color="var(--system-gray)" />
-          <input type="text" placeholder="Поиск..." value={search} onChange={e => setSearch(e.target.value)} style={{ border: 'none', background: 'transparent', outline: 'none', width: '100%', fontSize: '13px', color: 'var(--text-primary)', fontFamily: 'Outfit, sans-serif', fontWeight: 300 }} />
+          <input type="text" placeholder="Поиск: название, IMEI, цена, поставщик, склад, статус, дата..." value={search} onChange={e => setSearch(e.target.value)} style={{ border: 'none', background: 'transparent', outline: 'none', width: '100%', fontSize: '13px', color: 'var(--text-primary)', fontFamily: 'Outfit, sans-serif', fontWeight: 300 }} />
         </div>
         <select className="input-field" value={filterWh} onChange={e => setFilterWh(e.target.value)} style={{ padding: '8px 10px', fontSize: '13px', minWidth: '120px' }}>
           <option value="">Все склады</option>
@@ -173,7 +255,7 @@ export default function Inventory() {
           <button className="btn btn-secondary" onClick={() => setSortOpen(!sortOpen)}><ArrowUpDown size={14} /> Сорт.</button>
           {sortOpen && (
             <div style={{ position: 'absolute', right: 0, top: '40px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius-sm)', boxShadow: 'var(--shadow-lg)', zIndex: 200, minWidth: '150px', overflow: 'hidden' }}>
-              {[{ key: 'name', label: 'Название' }, { key: 'status', label: 'Статус' }, { key: 'updatedAt', label: 'Дата' }, { key: 'price', label: 'Цена' }].map(opt => (
+              {[{ key: 'name', label: 'Название' }, { key: 'status', label: 'Статус' }, { key: 'updatedAt', label: 'Дата' }, { key: 'price', label: 'Закупка' }].map(opt => (
                 <button key={opt.key} onClick={() => { setSortBy(opt.key); setSortOpen(false); }}
                   style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 14px', border: 'none', background: sortBy === opt.key ? 'var(--accent)' : 'transparent', color: sortBy === opt.key ? '#fff' : 'var(--text-primary)', cursor: 'pointer', fontSize: '13px', fontWeight: 400, fontFamily: 'Outfit, sans-serif' }}>
                   {opt.label}
@@ -193,7 +275,8 @@ export default function Inventory() {
               </th>
               <th style={{ padding: '10px 14px', fontWeight: 400 }}>Название</th>
               <th style={{ padding: '10px 14px', fontWeight: 400 }}>IMEI</th>
-              <th style={{ padding: '10px 14px', fontWeight: 400 }}>Цена</th>
+              <th style={{ padding: '10px 14px', fontWeight: 400 }}>Закупка</th>
+              <th style={{ padding: '10px 14px', fontWeight: 400 }}>Продажа</th>
               <th style={{ padding: '10px 14px', fontWeight: 400 }}>Поставщик</th>
               <th style={{ padding: '10px 14px', fontWeight: 400 }}>Склад</th>
               <th style={{ padding: '10px 14px', fontWeight: 400 }}>Категория</th>
@@ -201,16 +284,17 @@ export default function Inventory() {
               <th style={{ padding: '10px 14px', fontWeight: 400 }}>Дата</th>
             </tr></thead>
             <tbody>
-              {filtered.length === 0 ? <tr><td colSpan={9} style={{ padding: '36px', textAlign: 'center', color: 'var(--text-secondary)' }}>Товары не найдены</td></tr> :
+              {filtered.length === 0 ? <tr><td colSpan={10} style={{ padding: '36px', textAlign: 'center', color: 'var(--text-secondary)' }}>Товары не найдены</td></tr> :
                 filtered.map(p => {
-                  const c = STATUS_COLORS[p.status] || STATUS_COLORS['Активен'];
+                  const c = STATUS_COLORS[p.status] || STATUS_COLORS['Склад'];
                   const isSel = selectedIds.has(p.id);
                   return (
                     <tr key={p.id} onClick={() => toggleSelect(p.id)} style={{ borderBottom: '1px solid var(--border-color)', background: isSel ? 'rgba(52,199,89,0.05)' : 'transparent', cursor: 'pointer', transition: 'background 0.15s' }}>
                       <td style={{ padding: '10px 14px' }}><input type="checkbox" checked={isSel} readOnly style={{ width: '16px', height: '16px', accentColor: 'var(--accent)', cursor: 'pointer' }} /></td>
                       <td style={{ padding: '10px 14px', fontWeight: 400 }}>{p.name}</td>
                       <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: '12px' }}>{p.imei || '-'}</td>
-                      <td style={{ padding: '10px 14px' }}>{Number(p.price).toLocaleString('ru-RU')} ₽</td>
+                      <td style={{ padding: '10px 14px' }}>{formatCurrency(p.price)}</td>
+                      <td style={{ padding: '10px 14px' }}>{p.salePrice !== null && p.salePrice !== undefined ? formatCurrency(p.salePrice) : '-'}</td>
                       <td style={{ padding: '10px 14px' }}>{p.supplier || '-'}</td>
                       <td style={{ padding: '10px 14px' }}>{p.warehouse}</td>
                       <td style={{ padding: '10px 14px', fontSize: '12px' }}>{p.category}</td>
@@ -243,6 +327,12 @@ export default function Inventory() {
             <input className="input-field" value={moveForm.orderNumber} onChange={e => setMoveForm({ ...moveForm, orderNumber: e.target.value })} placeholder="Например, 12345" />
           </div>
         )}
+        {isSoldDestination(moveForm.destination) && (
+          <div className="input-group">
+            <label className="input-label">Цена продажи</label>
+            <input className="input-field" type="number" value={moveForm.salePrice} onChange={e => setMoveForm({ ...moveForm, salePrice: e.target.value })} placeholder="Например, 79990" />
+          </div>
+        )}
         <div className="input-group"><label className="input-label">Комментарий</label><textarea className="input-field" rows={2} value={moveForm.comment} onChange={e => setMoveForm({ ...moveForm, comment: e.target.value })} style={{ resize: 'vertical', fontFamily: 'Outfit, sans-serif' }} /></div>
         <ModalButtons onCancel={() => setShowMove(false)} onConfirm={handleMove} confirmLabel="Подтвердить" />
       </Modal>}
@@ -266,7 +356,8 @@ function FormFields({ form, setForm, suppliers, warehouses, categories }: { form
   return <>
     <div className="input-group"><label className="input-label">Название</label><input className="input-field" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
     <div className="input-group"><label className="input-label">IMEI</label><input className="input-field" value={form.imei} onChange={e => setForm({ ...form, imei: e.target.value })} /></div>
-    <div className="input-group"><label className="input-label">Цена</label><input className="input-field" type="number" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} /></div>
+    <div className="input-group"><label className="input-label">Цена закупки</label><input className="input-field" type="number" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} /></div>
+    <div className="input-group"><label className="input-label">Цена продажи</label><input className="input-field" type="number" value={form.salePrice} onChange={e => setForm({ ...form, salePrice: e.target.value })} /></div>
     <div className="input-group"><label className="input-label">Поставщик</label>
       <select className="input-field" value={form.supplier} onChange={e => setForm({ ...form, supplier: e.target.value })}>
         <option value="">-- выбрать --</option>

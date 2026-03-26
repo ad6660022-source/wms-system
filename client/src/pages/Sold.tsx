@@ -5,6 +5,8 @@ import { api } from '../App';
 import { useToast } from '../components/Toast';
 
 const socket = io('/', { transports: ['websocket'] });
+const isSoldStatus = (status: string) => status === 'Продан' || status === 'Продано';
+const formatCurrency = (value: number | string | null | undefined) => `${Number(value || 0).toLocaleString('ru-RU')} ₽`;
 
 export default function Sold() {
   const { show: toast } = useToast();
@@ -13,7 +15,7 @@ export default function Sold() {
 
   const load = () => {
     api('/api/products').then(r => r.json()).then(d => {
-      if (Array.isArray(d)) setProducts(d.filter((p: any) => p.status === 'Продано'));
+      if (Array.isArray(d)) setProducts(d.filter((p: any) => isSoldStatus(p.status)));
     }).catch(() => {});
   };
   useEffect(() => { load(); socket.on('products:updated', load); return () => { socket.off('products:updated', load); }; }, []);
@@ -60,9 +62,9 @@ export default function Sold() {
                   <td style={{ padding: '10px 14px', fontWeight: 400 }}>{p.name}</td>
                   <td style={{ padding: '10px 14px', fontWeight: 500 }}>{p.orderNumber ? `№${p.orderNumber}` : '-'}</td>
                   <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: '12px' }}>{p.imei || '-'}</td>
-                  <td style={{ padding: '10px 14px' }}>{Number(p.price).toLocaleString('ru-RU')} ₽</td>
+                  <td style={{ padding: '10px 14px' }}>{formatCurrency(p.salePrice ?? p.price)}</td>
                   <td style={{ padding: '10px 14px' }}>{p.warehouse}</td>
-                  <td style={{ padding: '10px 14px' }}><span style={{ background: 'rgba(255,59,48,0.1)', color: '#FF3B30', padding: '3px 8px', borderRadius: '5px', fontSize: '12px' }}>Продано</span></td>
+                  <td style={{ padding: '10px 14px' }}><span style={{ background: 'rgba(255,59,48,0.1)', color: '#FF3B30', padding: '3px 8px', borderRadius: '5px', fontSize: '12px' }}>Продан</span></td>
                   <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontSize: '12px' }}>{new Date(p.updatedAt).toLocaleDateString('ru-RU')}</td>
                   <td style={{ padding: '10px 14px' }}><button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '12px' }} onClick={() => handleReturn(p.id)}><RotateCcw size={12} /> Вернуть</button></td>
                 </tr>

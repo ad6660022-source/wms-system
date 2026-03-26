@@ -17,11 +17,15 @@ const prisma = new PrismaClient();
 loadEnvFile(path.join(__dirname, '.env'));
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 const FALLBACK_JWT_SECRET = 'sklad-default-insecure-secret-change-me';
 const FALLBACK_FIRST_ADMIN_PASSWORD = 'admin12345';
 const config = getRuntimeConfig();
+const STATUS_IN_STOCK = 'Склад';
+const STATUS_SOLD = 'Продан';
+const STATUS_DEFECT = 'Брак';
+const STATUS_ARCHIVE = 'Архив';
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -155,6 +159,10 @@ async function parseProductInput(body, { partial = false } = {}) {
     data.price = normalizePrice(body.price, { required: !partial });
   }
 
+  if (!partial || body.salePrice !== undefined) {
+    data.salePrice = normalizePrice(body.salePrice);
+  }
+
   if (!partial || body.imei !== undefined) {
     data.imei = normalizeImei(body.imei);
   }
@@ -174,6 +182,40 @@ async function parseProductInput(body, { partial = false } = {}) {
   }
 
   return data;
+}
+
+function isSoldStatus(status) {
+  return status === STATUS_SOLD || status === 'Продано';
+}
+
+function isStockStatus(status) {
+  return status === STATUS_IN_STOCK || status === 'Активен';
+}
+
+function getProductSaleAmount(product) {
+  return Number(product.salePrice ?? product.price ?? 0);
+}
+
+function getProductCostAmount(product) {
+  return Number(product.price ?? 0);
+}
+
+function getSoldDate(product) {
+  return product.soldAt ? new Date(product.soldAt) : new Date(product.updatedAt);
+}
+
+function getMovementStatus(destination) {
+  if (typeof destination === 'string' && destination.startsWith('Продан')) return STATUS_SOLD;
+  if (destination === STATUS_DEFECT) return STATUS_DEFECT;
+  return STATUS_ARCHIVE;
+}
+
+function getDatePeriodStats(products, startDate) {
+  const filtered = products.filter(product => getSoldDate(product) >= startDate);
+  return {
+    count: filtered.length,
+    revenue: filtered.reduce((sum, product) => sum + getProductSaleAmount(product), 0),
+  };
 }
 
 // ====== AUTH MIDDLEWARE ======
@@ -200,6 +242,8 @@ async function seedDefaults() {
   for (const name of cats) {
     await prisma.category.upsert({ where: { name }, update: {}, create: { name } });
   }
+  await prisma.product.updateMany({ where: { status: 'Активен' }, data: { status: STATUS_IN_STOCK } });
+  await prisma.product.updateMany({ where: { status: 'Продано' }, data: { status: STATUS_SOLD } });
   // First admin password via env
   const existing = await prisma.setting.findUnique({ where: { key: 'password' } });
   if (!existing && config.firstAdminPassword.trim()) {
@@ -310,7 +354,7 @@ app.post('/api/products', authMiddleware, async (req, res) => {
     const data = await parseProductInput(req.body);
     await ensureUniqueImei(data.imei);
     const product = await prisma.product.create({
-      data: { ...data, status: 'Активен' }
+      data: { ...data, status: STATUS_IN_STOCK }
     });
     await prisma.auditLog.create({ data: { action: 'Добавлен товар', details: `${product.name} (${product.warehouse})` } });
     io.emit('products:updated');
@@ -352,27 +396,33 @@ app.delete('/api/products/:id', authMiddleware, async (req, res) => {
 });
 
 app.post('/api/products/:id/move', authMiddleware, async (req, res) => {
-  const { destination, comment, date, orderNumber } = req.body;
+  const { destination, comment, date, orderNumber, salePrice } = req.body;
   if (!destination || typeof destination !== 'string') {
     return res.status(400).json({ error: 'Укажите направление перемещения' });
   }
-  let status = 'Архив';
-  if (destination.startsWith('Продан')) status = 'Продано';
-  if (destination === 'Брак') status = 'Брак';
+  const status = getMovementStatus(destination);
   const normalizedOrderNumber = typeof orderNumber === 'string' ? orderNumber.trim() : '';
-  if (status === 'Продано' && !normalizedOrderNumber) {
+  const normalizedSalePrice = normalizePrice(salePrice);
+  if (status === STATUS_SOLD && !normalizedOrderNumber) {
     return res.status(400).json({ error: 'Номер заказа обязателен для продажи' });
   }
+  const existing = await prisma.product.findUnique({ where: { id: req.params.id } });
+  if (!existing) return res.status(404).json({ error: 'Не найден' });
   const product = await prisma.product.update({
     where: { id: req.params.id },
-    data: { status, orderNumber: status === 'Продано' ? normalizedOrderNumber : null }
+    data: {
+      status,
+      orderNumber: status === STATUS_SOLD ? normalizedOrderNumber : null,
+      salePrice: status === STATUS_SOLD ? (normalizedSalePrice ?? existing.salePrice ?? existing.price) : existing.salePrice,
+      soldAt: status === STATUS_SOLD ? (date ? new Date(date) : new Date()) : existing.soldAt,
+    }
   }).catch(() => null);
   if (!product) return res.status(404).json({ error: 'Не найден' });
   await prisma.movement.create({
     data: {
       productId: product.id,
       productName: product.name,
-      orderNumber: status === 'Продано' ? normalizedOrderNumber : null,
+      orderNumber: status === STATUS_SOLD ? normalizedOrderNumber : null,
       destination,
       comment: comment || null,
       date: date ? new Date(date) : new Date()
@@ -381,7 +431,7 @@ app.post('/api/products/:id/move', authMiddleware, async (req, res) => {
   await prisma.auditLog.create({
     data: {
       action: 'Движение',
-      details: `${product.name} -> ${destination}${status === 'Продано' ? ` (Заказ №${normalizedOrderNumber})` : ''}`
+      details: `${product.name} -> ${destination}${status === STATUS_SOLD ? ` (Заказ №${normalizedOrderNumber})` : ''}`
     }
   });
   io.emit('products:updated');
@@ -389,27 +439,31 @@ app.post('/api/products/:id/move', authMiddleware, async (req, res) => {
 });
 
 app.post('/api/products/bulk-move', authMiddleware, async (req, res) => {
-  const { ids, destination, comment, date, orderNumber } = req.body;
+  const { ids, destination, comment, date, orderNumber, salePrice } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'Нет товаров' });
   if (!destination || typeof destination !== 'string') return res.status(400).json({ error: 'Укажите направление перемещения' });
-  let status = 'Архив';
-  if (destination.startsWith('Продан')) status = 'Продано';
-  if (destination === 'Брак') status = 'Брак';
+  const status = getMovementStatus(destination);
   const normalizedOrderNumber = typeof orderNumber === 'string' ? orderNumber.trim() : '';
-  if (status === 'Продано' && !normalizedOrderNumber) {
+  const normalizedSalePrice = normalizePrice(salePrice);
+  if (status === STATUS_SOLD && !normalizedOrderNumber) {
     return res.status(400).json({ error: 'Номер заказа обязателен для продажи' });
   }
-  await prisma.product.updateMany({
-    where: { id: { in: ids } },
-    data: { status, orderNumber: status === 'Продано' ? normalizedOrderNumber : null }
-  });
   const products = await prisma.product.findMany({ where: { id: { in: ids } } });
   for (const p of products) {
+    await prisma.product.update({
+      where: { id: p.id },
+      data: {
+        status,
+        orderNumber: status === STATUS_SOLD ? normalizedOrderNumber : null,
+        salePrice: status === STATUS_SOLD ? (normalizedSalePrice ?? p.salePrice ?? p.price) : p.salePrice,
+        soldAt: status === STATUS_SOLD ? (date ? new Date(date) : new Date()) : p.soldAt,
+      }
+    });
     await prisma.movement.create({
       data: {
         productId: p.id,
         productName: p.name,
-        orderNumber: status === 'Продано' ? normalizedOrderNumber : null,
+        orderNumber: status === STATUS_SOLD ? normalizedOrderNumber : null,
         destination,
         comment: comment || null,
         date: date ? new Date(date) : new Date()
@@ -419,7 +473,7 @@ app.post('/api/products/bulk-move', authMiddleware, async (req, res) => {
   await prisma.auditLog.create({
     data: {
       action: 'Массовое движение',
-      details: `${products.length} товаров -> ${destination}${status === 'Продано' ? ` (Заказ №${normalizedOrderNumber})` : ''}`
+      details: `${products.length} товаров -> ${destination}${status === STATUS_SOLD ? ` (Заказ №${normalizedOrderNumber})` : ''}`
     }
   });
   io.emit('products:updated');
@@ -429,7 +483,7 @@ app.post('/api/products/bulk-move', authMiddleware, async (req, res) => {
 app.post('/api/products/:id/return', authMiddleware, async (req, res) => {
   const old = await prisma.product.findUnique({ where: { id: req.params.id } });
   if (!old) return res.status(404).json({ error: 'Не найден' });
-  const product = await prisma.product.update({ where: { id: req.params.id }, data: { status: 'Активен', orderNumber: null } });
+  const product = await prisma.product.update({ where: { id: req.params.id }, data: { status: STATUS_IN_STOCK, orderNumber: null, soldAt: null } });
   await prisma.movement.create({
     data: {
       productId: product.id,
@@ -442,7 +496,7 @@ app.post('/api/products/:id/return', authMiddleware, async (req, res) => {
   await prisma.auditLog.create({
     data: {
       action: 'Возврат',
-      details: `${product.name} (${old.status} -> Активен${old.orderNumber ? `, заказ №${old.orderNumber}` : ''})`
+      details: `${product.name} (${old.status} -> ${STATUS_IN_STOCK}${old.orderNumber ? `, заказ №${old.orderNumber}` : ''})`
     }
   });
   io.emit('products:updated');
@@ -498,30 +552,90 @@ app.get('/api/warehouse-stats', authMiddleware, async (req, res) => {
   const warehouses = await prisma.warehouse.findMany({ orderBy: { name: 'asc' } });
   const stats = await Promise.all(warehouses.map(async w => {
     const all = await prisma.product.findMany({ where: { warehouse: w.name } });
-    return { name: w.name, active: all.filter(p => p.status === 'Активен').length, sold: all.filter(p => p.status === 'Продано').length, defect: all.filter(p => p.status === 'Брак').length, total: all.length };
+    return {
+      name: w.name,
+      active: all.filter(p => isStockStatus(p.status)).length,
+      sold: all.filter(p => isSoldStatus(p.status)).length,
+      defect: all.filter(p => p.status === STATUS_DEFECT).length,
+      total: all.length
+    };
   }));
   res.json(stats);
 });
 
 // ====== STATISTICS ======
 app.get('/api/statistics', authMiddleware, async (req, res) => {
+  const now = new Date();
+  const dayStart = new Date(now);
+  dayStart.setHours(0, 0, 0, 0);
+  const weekStart = new Date(dayStart);
+  weekStart.setDate(weekStart.getDate() - 6);
+  const monthStart = new Date(dayStart);
+  monthStart.setDate(1);
+
+  const allProducts = await prisma.product.findMany({ orderBy: { updatedAt: 'desc' } });
+  const soldProducts = allProducts.filter(p => isSoldStatus(p.status));
+  const stockProducts = allProducts.filter(p => isStockStatus(p.status));
   const warehouses = await prisma.warehouse.findMany({ orderBy: { name: 'asc' } });
   const warehouseStats = await Promise.all(warehouses.map(async w => {
-    const all = await prisma.product.findMany({ where: { warehouse: w.name } });
+    const all = allProducts.filter(product => product.warehouse === w.name);
     return {
       name: w.name,
-      active: all.filter(p => p.status === 'Активен').length,
-      sold: all.filter(p => p.status === 'Продано').length,
-      defect: all.filter(p => p.status === 'Брак').length,
-      totalValue: all.filter(p => p.status === 'Активен').reduce((s, p) => s + p.price, 0),
+      active: all.filter(p => isStockStatus(p.status)).length,
+      sold: all.filter(p => isSoldStatus(p.status)).length,
+      defect: all.filter(p => p.status === STATUS_DEFECT).length,
+      totalValue: all.filter(p => isStockStatus(p.status)).reduce((s, p) => s + getProductCostAmount(p), 0),
       products: all.map(p => ({
-        name: p.name, imei: p.imei, price: p.price, status: p.status, category: p.category, supplier: p.supplier,
-        daysOnStock: p.status === 'Активен' ? Math.floor((Date.now() - new Date(p.createdAt).getTime()) / 86400000) : null,
-        daysToSell: p.status === 'Продано' ? Math.floor((new Date(p.updatedAt).getTime() - new Date(p.createdAt).getTime()) / 86400000) : null,
+        name: p.name,
+        imei: p.imei,
+        purchasePrice: p.price,
+        salePrice: p.salePrice,
+        status: p.status,
+        category: p.category,
+        supplier: p.supplier,
+        daysOnStock: isStockStatus(p.status) ? Math.floor((Date.now() - new Date(p.createdAt).getTime()) / 86400000) : null,
+        daysToSell: isSoldStatus(p.status) ? Math.floor((getSoldDate(p).getTime() - new Date(p.createdAt).getTime()) / 86400000) : null,
       })),
     };
   }));
-  res.json({ warehouseStats, totalProducts: await prisma.product.count() });
+
+  const trend = Array.from({ length: 14 }, (_, index) => {
+    const date = new Date(dayStart);
+    date.setDate(dayStart.getDate() - (13 - index));
+    const nextDate = new Date(date);
+    nextDate.setDate(date.getDate() + 1);
+    const productsForDay = soldProducts.filter(product => {
+      const soldAt = getSoldDate(product);
+      return soldAt >= date && soldAt < nextDate;
+    });
+    return {
+      label: date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }),
+      count: productsForDay.length,
+      revenue: productsForDay.reduce((sum, product) => sum + getProductSaleAmount(product), 0),
+    };
+  });
+
+  res.json({
+    warehouseStats,
+    totalProducts: allProducts.length,
+    inventory: {
+      count: stockProducts.length,
+      value: stockProducts.reduce((sum, product) => sum + getProductCostAmount(product), 0),
+      soldCount: soldProducts.length,
+      soldRevenue: soldProducts.reduce((sum, product) => sum + getProductSaleAmount(product), 0),
+      defectCount: allProducts.filter(product => product.status === STATUS_DEFECT).length,
+    },
+    sales: {
+      day: getDatePeriodStats(soldProducts, dayStart),
+      week: getDatePeriodStats(soldProducts, weekStart),
+      month: getDatePeriodStats(soldProducts, monthStart),
+      all: {
+        count: soldProducts.length,
+        revenue: soldProducts.reduce((sum, product) => sum + getProductSaleAmount(product), 0),
+      }
+    },
+    trend,
+  });
 });
 
 // ====== EXCEL EXPORT ======
@@ -529,7 +643,19 @@ app.post('/api/export/excel', authMiddleware, async (req, res) => {
   const { ids } = req.body;
   const where = Array.isArray(ids) && ids.length > 0 ? { id: { in: ids } } : {};
   const data = await prisma.product.findMany({ where });
-  const rows = data.map(p => ({ 'Название': p.name, 'IMEI': p.imei || '', 'Номер заказа': p.orderNumber || '', 'Цена': p.price, 'Поставщик': p.supplier || '', 'Склад': p.warehouse, 'Категория': p.category, 'Статус': p.status, 'Дата создания': new Date(p.createdAt).toLocaleDateString('ru-RU'), 'Дата изменения': new Date(p.updatedAt).toLocaleDateString('ru-RU') }));
+  const rows = data.map(p => ({
+    'Название': p.name,
+    'IMEI': p.imei || '',
+    'Номер заказа': p.orderNumber || '',
+    'Цена закупки': p.price,
+    'Цена продажи': p.salePrice ?? '',
+    'Поставщик': p.supplier || '',
+    'Склад': p.warehouse,
+    'Категория': p.category,
+    'Статус': p.status,
+    'Дата создания': new Date(p.createdAt).toLocaleDateString('ru-RU'),
+    'Дата изменения': new Date(p.updatedAt).toLocaleDateString('ru-RU')
+  }));
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Товары');
@@ -541,7 +667,19 @@ app.post('/api/export/excel', authMiddleware, async (req, res) => {
 
 app.post('/api/export/statistics', authMiddleware, async (req, res) => {
   const data = await prisma.product.findMany();
-  const rows = data.map(p => ({ 'Название': p.name, 'IMEI': p.imei || '', 'Номер заказа': p.orderNumber || '', 'Цена': p.price, 'Склад': p.warehouse, 'Категория': p.category, 'Статус': p.status, 'Дней на складе': p.status === 'Активен' ? Math.floor((Date.now() - new Date(p.createdAt).getTime()) / 86400000) : '-', 'Дней до продажи': p.status === 'Продано' ? Math.floor((new Date(p.updatedAt).getTime() - new Date(p.createdAt).getTime()) / 86400000) : '-', 'Дата добавления': new Date(p.createdAt).toLocaleDateString('ru-RU') }));
+  const rows = data.map(p => ({
+    'Название': p.name,
+    'IMEI': p.imei || '',
+    'Номер заказа': p.orderNumber || '',
+    'Цена закупки': p.price,
+    'Цена продажи': p.salePrice ?? '',
+    'Склад': p.warehouse,
+    'Категория': p.category,
+    'Статус': p.status,
+    'Дней на складе': isStockStatus(p.status) ? Math.floor((Date.now() - new Date(p.createdAt).getTime()) / 86400000) : '-',
+    'Дней до продажи': isSoldStatus(p.status) ? Math.floor((getSoldDate(p).getTime() - new Date(p.createdAt).getTime()) / 86400000) : '-',
+    'Дата добавления': new Date(p.createdAt).toLocaleDateString('ru-RU')
+  }));
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Статистика');
@@ -549,6 +687,76 @@ app.post('/api/export/statistics', authMiddleware, async (req, res) => {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename=statistics.xlsx');
   res.send(buf);
+});
+
+app.get('/api/export/import-template', authMiddleware, async (req, res) => {
+  const rows = [
+    {
+      'Название': 'iPhone 15',
+      'IMEI': '123456789012345',
+      'Цена закупки': 70000,
+      'Цена продажи': 79990,
+      'Поставщик': 'ООО Поставка',
+      'Склад': 'Василий',
+      'Категория': 'Телефоны',
+    }
+  ];
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Шаблон');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename=product-import-template.xlsx');
+  res.send(buf);
+});
+
+app.post('/api/import/excel', authMiddleware, async (req, res) => {
+  try {
+    const { fileData } = req.body || {};
+    if (!Array.isArray(fileData) || fileData.length === 0) {
+      return res.status(400).json({ error: 'Файл Excel не передан' });
+    }
+    const buffer = Buffer.from(fileData);
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) return res.status(400).json({ error: 'В файле нет листов' });
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'Файл пустой' });
+    }
+
+    let importedCount = 0;
+    const errors = [];
+
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      try {
+        const data = await parseProductInput({
+          name: row['Название'],
+          imei: row['IMEI'],
+          price: row['Цена закупки'] ?? row['Цена'],
+          salePrice: row['Цена продажи'],
+          supplier: row['Поставщик'],
+          warehouse: row['Склад'],
+          category: row['Категория'],
+        });
+        await ensureUniqueImei(data.imei);
+        await prisma.product.create({ data: { ...data, status: STATUS_IN_STOCK } });
+        importedCount += 1;
+      } catch (error) {
+        errors.push(`Строка ${index + 2}: ${getErrorMessage(error)}`);
+      }
+    }
+
+    if (importedCount > 0) {
+      await prisma.auditLog.create({ data: { action: 'Импорт Excel', details: `Импортировано товаров: ${importedCount}` } });
+      io.emit('products:updated');
+    }
+
+    res.json({ importedCount, errors });
+  } catch (error) {
+    res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+  }
 });
 
 // ====== HEALTH ======

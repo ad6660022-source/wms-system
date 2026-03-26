@@ -11,17 +11,19 @@ datasource db {
 }
 
 model Product {
-  id        String     @id @default(uuid())
-  name      String
-  imei      String?
-  price     Float      @default(0)
-  supplier  String?
-  warehouse String     @default("Василий")
-  category  String     @default("Без категории")
-  status    String     @default("Активен")
+  id          String     @id @default(uuid())
+  name        String
+  imei        String?
+  price       Float      @default(0)
+  salePrice   Float?
+  supplier    String?
+  warehouse   String     @default("Василий")
+  category    String     @default("Без категории")
+  status      String     @default("Склад")
   orderNumber String?
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  soldAt      DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
   movements Movement[]
 }
 

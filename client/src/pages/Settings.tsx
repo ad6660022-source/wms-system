@@ -13,6 +13,18 @@ const readApiError = async (res: Response, fallback: string) => {
   }
 };
 
+function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+  return (
+    <div className="card" style={{ marginBottom: '18px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+        <span style={{ color: 'var(--accent)' }}>{icon}</span>
+        <h2 style={{ margin: 0 }}>{title}</h2>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 export default function Settings() {
   const { show: toast } = useToast();
   const [warehouses, setWarehouses] = useState<any[]>([]);
@@ -50,16 +62,6 @@ export default function Settings() {
     const res = await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ newPassword: newPwd }) });
     if (res.ok) { toast('Пароль изменён'); setNewPwd(''); setConfirmPwd(''); } else toast(await readApiError(res, 'Ошибка'), 'error');
   };
-
-  const Section = ({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) => (
-    <div className="card" style={{ marginBottom: '18px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-        <span style={{ color: 'var(--accent)' }}>{icon}</span>
-        <h2 style={{ margin: 0 }}>{title}</h2>
-      </div>
-      {children}
-    </div>
-  );
 
   return (
     <div className="page-container">
