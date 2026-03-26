@@ -243,17 +243,25 @@ async function createAdminFromConfig() {
   });
 
   if (existingUser) {
+    const updateData = {};
+    if (existingUser.login !== login) updateData.login = login;
+    if (existingUser.email !== email) updateData.email = email;
+    if (!existingUser.isAdmin) {
+      updateData.isAdmin = true;
+      updateData.passwordHash = passwordHash;
+    }
+    if (existingUser.status !== USER_STATUS_ACTIVE) updateData.status = USER_STATUS_ACTIVE;
+
+    if (Object.keys(updateData).length === 0) {
+      console.log(`[auth] Configured administrator @${existingUser.login} is already active`);
+      return existingUser;
+    }
+
     const promoted = await prisma.user.update({
       where: { id: existingUser.id },
-      data: {
-        login,
-        email,
-        passwordHash,
-        isAdmin: true,
-        status: USER_STATUS_ACTIVE,
-      },
+      data: updateData,
     });
-    console.log(`[auth] Administrator access restored for @${promoted.login}`);
+    console.log(`[auth] Administrator access ensured for @${promoted.login}`);
     return promoted;
   }
 
@@ -444,15 +452,7 @@ async function seedDefaults() {
   }
   await prisma.product.updateMany({ where: { status: 'Активен' }, data: { status: STATUS_IN_STOCK } });
   await prisma.product.updateMany({ where: { status: 'Продано' }, data: { status: STATUS_SOLD } });
-  const existingAdmin = await prisma.user.findFirst({ where: { isAdmin: true } });
-  if (!existingAdmin) {
-    await createAdminFromConfig();
-  } else if (existingAdmin.status !== USER_STATUS_ACTIVE) {
-    await prisma.user.update({
-      where: { id: existingAdmin.id },
-      data: { status: USER_STATUS_ACTIVE },
-    });
-  }
+  await createAdminFromConfig();
 }
 
 // ====== AUTH ======
