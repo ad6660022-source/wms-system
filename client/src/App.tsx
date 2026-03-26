@@ -179,7 +179,7 @@ const Dashboard = () => {
 
         <section>
           <SectionHeader title="Склады" caption="Остатки и движение по каждому складу" />
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(520px, 100%), 1fr))', gap: '18px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
             {stats?.warehouseStats?.map((w: any) => (
               <div key={w.name} className="card" style={{ padding: 0, overflow: 'hidden' }}>
                 <div style={{ padding: '18px 18px 12px' }}>
