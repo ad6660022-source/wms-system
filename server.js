@@ -19,8 +19,7 @@ loadEnvFile(path.join(__dirname, '.env'));
 app.use(cors());
 app.use(express.json());
 
-const JWT_SECRET = requireEnv('JWT_SECRET');
-const FIRST_ADMIN_PASSWORD = process.env.FIRST_ADMIN_PASSWORD || '';
+const config = getRuntimeConfig();
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -46,6 +45,20 @@ function requireEnv(name) {
     throw new Error(`Environment variable ${name} is required. Set it in the shell or .env file.`);
   }
   return value;
+}
+
+function getRuntimeConfig() {
+  try {
+    return {
+      jwtSecret: requireEnv('JWT_SECRET'),
+      firstAdminPassword: process.env.FIRST_ADMIN_PASSWORD || '',
+    };
+  } catch (error) {
+    console.error('[config] Startup configuration error.');
+    console.error(`[config] ${getErrorMessage(error)}`);
+    console.error('[config] Add the missing values to .env or the deployment environment and restart the server.');
+    process.exit(1);
+  }
 }
 
 function normalizeRequiredText(value, fieldName) {
@@ -169,7 +182,7 @@ function authMiddleware(req, res, next) {
   const token = req.headers['authorization']?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Не авторизован' });
   try {
-    jwt.verify(token, JWT_SECRET);
+    jwt.verify(token, config.jwtSecret);
     next();
   } catch {
     return res.status(401).json({ error: 'Токен недействителен' });
@@ -190,15 +203,15 @@ async function seedDefaults() {
   }
   // First admin password via env
   const existing = await prisma.setting.findUnique({ where: { key: 'password' } });
-  if (!existing && FIRST_ADMIN_PASSWORD.trim()) {
-    if (FIRST_ADMIN_PASSWORD.trim().length < 8) {
+  if (!existing && config.firstAdminPassword.trim()) {
+    if (config.firstAdminPassword.trim().length < 8) {
       throw new Error('FIRST_ADMIN_PASSWORD must be at least 8 characters long');
     }
-    const hashed = await bcrypt.hash(FIRST_ADMIN_PASSWORD.trim(), 10);
+    const hashed = await bcrypt.hash(config.firstAdminPassword.trim(), 10);
     await prisma.setting.create({ data: { key: 'password', value: hashed } });
     console.log('Admin password initialized from FIRST_ADMIN_PASSWORD');
   }
-  if (!existing && !FIRST_ADMIN_PASSWORD.trim()) {
+  if (!existing && !config.firstAdminPassword.trim()) {
     console.warn('Admin password is not configured. Set FIRST_ADMIN_PASSWORD in .env and restart the server.');
   }
 }
@@ -210,7 +223,7 @@ app.post('/api/auth/login', async (req, res) => {
   if (!setting) return res.status(503).json({ error: 'Вход ещё не настроен. Укажите FIRST_ADMIN_PASSWORD в .env и перезапустите сервер.' });
   const ok = await bcrypt.compare(password, setting.value);
   if (!ok) return res.status(401).json({ error: 'Неверный пароль' });
-  const token = jwt.sign({ role: 'admin' }, JWT_SECRET, { expiresIn: '30d' });
+  const token = jwt.sign({ role: 'admin' }, config.jwtSecret, { expiresIn: '30d' });
   res.json({ token });
 });
 
