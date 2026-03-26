@@ -77,8 +77,6 @@ export const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
   'Продано': { bg: 'rgba(255,59,48,0.1)', text: '#FF3B30' },
 };
 
-const isStockStatus = (status: string) => status === 'Склад' || status === 'Активен';
-const isSoldStatus = (status: string) => status === 'Продан' || status === 'Продано';
 const formatCurrency = (value: number) => `${Number(value || 0).toLocaleString('ru-RU')} ₽`;
 
 const SalesPeriodCard = ({ title, count, revenue }: { title: string; count: number; revenue: number }) => (
