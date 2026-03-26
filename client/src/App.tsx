@@ -127,6 +127,98 @@ const SalesChart = ({ trend }: { trend: Array<{ label: string; count: number; re
   );
 };
 
+const WAREHOUSE_COLUMNS = [
+  { key: 'name', label: 'Название', width: '22%', align: 'left' as const },
+  { key: 'purchasePrice', label: 'Закупка', width: '14%', align: 'right' as const },
+  { key: 'salePrice', label: 'Продажа', width: '14%', align: 'right' as const },
+  { key: 'category', label: 'Категория', width: '16%', align: 'left' as const },
+  { key: 'status', label: 'Статус', width: '10%', align: 'center' as const },
+  { key: 'daysOnStock', label: 'Дней на складе', width: '12%', align: 'center' as const },
+  { key: 'daysToSell', label: 'Дней до продажи', width: '12%', align: 'center' as const },
+];
+
+const WarehouseSummaryPill = ({ label, value }: { label: string; value: React.ReactNode }) => (
+  <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', padding: '8px 12px', borderRadius: '999px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)' }}>
+    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{label}</span>
+    <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>{value}</span>
+  </div>
+);
+
+const WarehouseText = ({ children, align = 'left', muted = false, strong = false }: { children: React.ReactNode; align?: 'left' | 'center' | 'right'; muted?: boolean; strong?: boolean }) => (
+  <span style={{ display: 'block', width: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: align, color: muted ? 'var(--text-secondary)' : 'var(--text-primary)', fontWeight: strong ? 500 : 400 }}>
+    {children}
+  </span>
+);
+
+const WarehouseCard = ({ warehouse }: { warehouse: any }) => {
+  const headerCellStyle = { padding: '12px 16px', fontWeight: 400 as const, fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' as const };
+  const bodyCellStyle = { padding: '14px 16px', verticalAlign: 'middle' as const, borderTop: '1px solid var(--border-color)' };
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid var(--border-color)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', marginBottom: '14px', flexWrap: 'wrap' }}>
+          <div>
+            <h3 style={{ marginBottom: '4px' }}>Склад: {warehouse.name}</h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Остатки и движение по выбранному складу</p>
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+          <WarehouseSummaryPill label="На складе" value={warehouse.active} />
+          <WarehouseSummaryPill label="Продано" value={warehouse.sold} />
+          <WarehouseSummaryPill label="Брак" value={warehouse.defect} />
+          <WarehouseSummaryPill label="Стоимость" value={formatCurrency(warehouse.totalValue)} />
+        </div>
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', textAlign: 'left', fontSize: '13px' }}>
+          <colgroup>
+            {WAREHOUSE_COLUMNS.map(column => <col key={column.key} style={{ width: column.width }} />)}
+          </colgroup>
+          <thead>
+            <tr style={{ background: 'var(--bg-primary)' }}>
+              {WAREHOUSE_COLUMNS.map(column => (
+                <th key={column.key} style={{ ...headerCellStyle, textAlign: column.align }}>
+                  {column.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {warehouse.products.length === 0 ? (
+              <tr>
+                <td colSpan={WAREHOUSE_COLUMNS.length} style={{ padding: '26px', textAlign: 'center', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)' }}>
+                  Нет товаров
+                </td>
+              </tr>
+            ) : (
+              warehouse.products.map((product: any, index: number) => {
+                const color = STATUS_COLORS[product.status] || STATUS_COLORS['Склад'];
+                return (
+                  <tr key={`${warehouse.name}-${index}`} style={{ background: index % 2 === 0 ? 'transparent' : 'rgba(60,60,67,0.02)' }}>
+                    <td style={bodyCellStyle}><WarehouseText strong>{product.name}</WarehouseText></td>
+                    <td style={bodyCellStyle}><WarehouseText align="right">{formatCurrency(product.purchasePrice)}</WarehouseText></td>
+                    <td style={bodyCellStyle}><WarehouseText align="right">{product.salePrice !== null && product.salePrice !== undefined ? formatCurrency(product.salePrice) : '-'}</WarehouseText></td>
+                    <td style={bodyCellStyle}><WarehouseText muted>{product.category}</WarehouseText></td>
+                    <td style={bodyCellStyle}>
+                      <div style={{ display: 'flex', justifyContent: 'center' }}>
+                        <span style={{ background: color.bg, color: color.text, padding: '4px 10px', borderRadius: '999px', fontSize: '12px', lineHeight: 1.2, whiteSpace: 'nowrap' }}>{product.status}</span>
+                      </div>
+                    </td>
+                    <td style={bodyCellStyle}><WarehouseText align="center" strong>{product.daysOnStock !== null ? `${product.daysOnStock}д` : '-'}</WarehouseText></td>
+                    <td style={bodyCellStyle}><WarehouseText align="center" strong>{product.daysToSell !== null ? `${product.daysToSell}д` : '-'}</WarehouseText></td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
 // ====== DASHBOARD ======
 const Dashboard = () => {
   const [stats, setStats] = useState<any>(null);
@@ -180,46 +272,7 @@ const Dashboard = () => {
         <section>
           <SectionHeader title="Склады" caption="Остатки и движение по каждому складу" />
           <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-            {stats?.warehouseStats?.map((w: any) => (
-              <div key={w.name} className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                <div style={{ padding: '18px 18px 12px' }}>
-                  <h3 style={{ marginBottom: '6px' }}>Склад: {w.name}</h3>
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
-                    На складе: {w.active} | Продано: {w.sold} | Брак: {w.defect} | Стоимость: {formatCurrency(w.totalValue)}
-                  </p>
-                </div>
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
-                    <thead><tr style={{ background: 'var(--bg-primary)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
-                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Название</th>
-                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Закупка</th>
-                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Продажа</th>
-                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Категория</th>
-                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Статус</th>
-                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Дней на складе</th>
-                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Дней до продажи</th>
-                    </tr></thead>
-                    <tbody>
-                      {w.products.length === 0 ? <tr><td colSpan={7} style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)' }}>Нет товаров</td></tr> :
-                        w.products.map((p: any, i: number) => {
-                          const c = STATUS_COLORS[p.status] || STATUS_COLORS['Склад'];
-                          return (
-                            <tr key={i} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                              <td style={{ padding: '10px 14px', fontWeight: 400 }}>{p.name}</td>
-                              <td style={{ padding: '10px 14px' }}>{formatCurrency(p.purchasePrice)}</td>
-                              <td style={{ padding: '10px 14px' }}>{p.salePrice !== null && p.salePrice !== undefined ? formatCurrency(p.salePrice) : '-'}</td>
-                              <td style={{ padding: '10px 14px', fontSize: '12px' }}>{p.category}</td>
-                              <td style={{ padding: '10px 14px' }}><span style={{ background: c.bg, color: c.text, padding: '3px 8px', borderRadius: '5px', fontSize: '12px' }}>{p.status}</span></td>
-                              <td style={{ padding: '10px 14px', textAlign: 'center' }}>{p.daysOnStock !== null ? <span style={{ fontWeight: 500, color: p.daysOnStock > 30 ? 'var(--system-orange)' : 'var(--text-primary)' }}>{p.daysOnStock}д</span> : '-'}</td>
-                              <td style={{ padding: '10px 14px', textAlign: 'center' }}>{p.daysToSell !== null ? <span style={{ fontWeight: 500, color: 'var(--system-green)' }}>{p.daysToSell}д</span> : '-'}</td>
-                            </tr>
-                          );
-                        })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ))}
+            {stats?.warehouseStats?.map((w: any) => <WarehouseCard key={w.name} warehouse={w} />)}
           </div>
         </section>
       </div>
