@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Search, RotateCcw } from 'lucide-react';
 import { io } from 'socket.io-client';
-import { api } from '../App';
 import { useToast } from '../components/Toast';
+import { api } from '../lib/api';
 
 const socket = io('/', { transports: ['websocket'] });
 const isSoldStatus = (status: string) => status === 'Продан' || status === 'Продано';

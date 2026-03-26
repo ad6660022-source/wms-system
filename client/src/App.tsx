@@ -1,21 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { LayoutDashboard, Package, PackageOpen, ShoppingBag, Users, ClipboardList, User, Download, Sun, Moon, Settings2, LogOut } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { ToastProvider } from './components/Toast';
+import { api, clearStoredToken, getStoredToken, storeToken } from './lib/api';
+import { STATUS_COLORS } from './lib/status';
 import Inventory from './pages/Inventory';
 import Sold from './pages/Sold';
 import Suppliers from './pages/Suppliers';
 import Journal from './pages/Journal';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
+import Register from './pages/Register';
+import type { AuthSuccessPayload, AuthUser } from './types/auth';
 
 const socket = io('/', { transports: ['websocket'] });
-
-// ====== API HELPER ======
-export const token = () => localStorage.getItem('sklToken') || '';
-export const api = (url: string, opts: RequestInit = {}) =>
-  fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}`, ...((opts as any).headers || {}) } });
 
 // ====== SIDEBAR ======
 const Sidebar = ({ onLogout }: { onLogout: () => void }) => (
@@ -47,7 +46,7 @@ const Sidebar = ({ onLogout }: { onLogout: () => void }) => (
 );
 
 // ====== HEADER ======
-const Header = ({ darkMode, toggleDark }: { darkMode: boolean; toggleDark: () => void }) => (
+const Header = ({ darkMode, toggleDark, currentUser }: { darkMode: boolean; toggleDark: () => void; currentUser: AuthUser }) => (
   <div className="header">
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
       <div style={{ width: '28px', height: '28px', borderRadius: '7px', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -61,21 +60,14 @@ const Header = ({ darkMode, toggleDark }: { darkMode: boolean; toggleDark: () =>
       </button>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px', borderRadius: 'var(--border-radius-sm)', background: 'var(--system-gray-6)' }}>
         <User size={16} color="var(--text-secondary)" />
-        <span style={{ fontSize: '13px', fontWeight: 400, color: 'var(--text-primary)' }}>Администратор</span>
+        <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
+          <span style={{ fontSize: '13px', fontWeight: 400, color: 'var(--text-primary)' }}>{currentUser.fullName || currentUser.login}</span>
+          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>@{currentUser.login}</span>
+        </div>
       </div>
     </div>
   </div>
 );
-
-// ====== STATUS COLORS ======
-export const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
-  'Склад': { bg: 'rgba(52,199,89,0.1)', text: '#34C759' },
-  'Активен': { bg: 'rgba(52,199,89,0.1)', text: '#34C759' },
-  'Архив': { bg: 'rgba(142,142,147,0.1)', text: '#8E8E93' },
-  'Брак': { bg: 'rgba(255,59,48,0.1)', text: '#FF3B30' },
-  'Продан': { bg: 'rgba(255,59,48,0.1)', text: '#FF3B30' },
-  'Продано': { bg: 'rgba(255,59,48,0.1)', text: '#FF3B30' },
-};
 
 const formatCurrency = (value: number) => `${Number(value || 0).toLocaleString('ru-RU')} ₽`;
 
@@ -87,7 +79,7 @@ const SalesPeriodCard = ({ title, count, revenue }: { title: string; count: numb
   </div>
 );
 
-const MetricCard = ({ title, value, hint, accent }: { title: string; value: React.ReactNode; hint: string; accent?: string }) => (
+const MetricCard = ({ title, value, hint, accent }: { title: string; value: ReactNode; hint: string; accent?: string }) => (
   <div className="card" style={{ minHeight: '118px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
     <div className="caption">{title}</div>
     <div style={{ fontSize: '28px', fontWeight: 500, color: accent || 'var(--text-primary)' }}>{value}</div>
@@ -137,14 +129,14 @@ const WAREHOUSE_COLUMNS = [
   { key: 'daysToSell', label: 'Дней до продажи', width: '12%', align: 'center' as const },
 ];
 
-const WarehouseSummaryPill = ({ label, value }: { label: string; value: React.ReactNode }) => (
+const WarehouseSummaryPill = ({ label, value }: { label: string; value: ReactNode }) => (
   <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', padding: '8px 12px', borderRadius: '999px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)' }}>
     <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{label}</span>
     <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>{value}</span>
   </div>
 );
 
-const WarehouseText = ({ children, align = 'left', muted = false, strong = false }: { children: React.ReactNode; align?: 'left' | 'center' | 'right'; muted?: boolean; strong?: boolean }) => (
+const WarehouseText = ({ children, align = 'left', muted = false, strong = false }: { children: ReactNode; align?: 'left' | 'center' | 'right'; muted?: boolean; strong?: boolean }) => (
   <span style={{ display: 'block', width: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: align, color: muted ? 'var(--text-secondary)' : 'var(--text-primary)', fontWeight: strong ? 500 : 400 }}>
     {children}
   </span>
@@ -281,11 +273,11 @@ const Dashboard = () => {
 };
 
 // ====== LAYOUT ======
-const Layout = ({ children, darkMode, toggleDark, onLogout }: { children: React.ReactNode; darkMode: boolean; toggleDark: () => void; onLogout: () => void }) => (
+const Layout = ({ children, darkMode, toggleDark, onLogout, currentUser }: { children: ReactNode; darkMode: boolean; toggleDark: () => void; onLogout: () => void; currentUser: AuthUser }) => (
   <div className="app-container">
     <Sidebar onLogout={onLogout} />
     <div className="main-content">
-      <Header darkMode={darkMode} toggleDark={toggleDark} />
+      <Header darkMode={darkMode} toggleDark={toggleDark} currentUser={currentUser} />
       {children}
     </div>
   </div>
@@ -293,7 +285,9 @@ const Layout = ({ children, darkMode, toggleDark, onLogout }: { children: React.
 
 // ====== APP ======
 export default function App() {
-  const [token, setToken] = useState(localStorage.getItem('sklToken') || '');
+  const [token, setToken] = useState(getStoredToken());
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(Boolean(getStoredToken()));
   const [darkMode, setDarkMode] = useState(localStorage.getItem('sklDark') === 'true');
 
   useEffect(() => {
@@ -303,32 +297,93 @@ export default function App() {
 
   useEffect(() => { socket.on('connect', () => console.log('WS ok')); return () => { socket.off('connect'); }; }, []);
 
-  const handleLogin = (t: string) => setToken(t);
-  const handleLogout = () => { localStorage.removeItem('sklToken'); setToken(''); };
-  const toggleDark = () => setDarkMode(d => !d);
+  useEffect(() => {
+    let cancelled = false;
 
-  if (!token) {
-    return (
-      <ToastProvider>
-        <Login onLogin={handleLogin} />
-      </ToastProvider>
-    );
-  }
+    async function loadMe() {
+      if (!token) {
+        setCurrentUser(null);
+        setAuthLoading(false);
+        return;
+      }
+      if (!currentUser) {
+        setAuthLoading(true);
+      }
+      try {
+        const res = await api('/api/auth/me');
+        if (!res.ok) {
+          throw new Error('unauthorized');
+        }
+        const data = await res.json();
+        if (!cancelled) {
+          setCurrentUser(data.user);
+        }
+      } catch {
+        clearStoredToken();
+        if (!cancelled) {
+          setToken('');
+          setCurrentUser(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setAuthLoading(false);
+        }
+      }
+    }
+
+    loadMe();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const handleAuthSuccess = ({ token: nextToken, user, rememberMe }: AuthSuccessPayload) => {
+    storeToken(nextToken, rememberMe);
+    setToken(nextToken);
+    setCurrentUser(user);
+    setAuthLoading(false);
+  };
+  const handleLogout = () => {
+    clearStoredToken();
+    setToken('');
+    setCurrentUser(null);
+  };
+  const toggleDark = () => setDarkMode(d => !d);
 
   return (
     <ToastProvider>
       <BrowserRouter>
-        <Layout darkMode={darkMode} toggleDark={toggleDark} onLogout={handleLogout}>
+        {authLoading ? (
+          <div className="auth-page">
+            <div className="auth-card" style={{ maxWidth: '420px', textAlign: 'center' }}>
+              <div className="auth-brand" style={{ justifyContent: 'center' }}>
+                <div className="auth-brand-icon">
+                  <PackageOpen size={26} />
+                </div>
+              </div>
+              <h1 style={{ marginBottom: '8px' }}>Подключаем кабинет</h1>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Проверяем сессию и загружаем профиль пользователя.</p>
+            </div>
+          </div>
+        ) : token && currentUser ? (
+          <Layout darkMode={darkMode} toggleDark={toggleDark} onLogout={handleLogout} currentUser={currentUser}>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/inventory" element={<Inventory />} />
+              <Route path="/sold" element={<Sold />} />
+              <Route path="/suppliers" element={<Suppliers />} />
+              <Route path="/journal" element={<Journal canViewAudit={currentUser.isAdmin} />} />
+              <Route path="/settings" element={<Settings currentUser={currentUser} onCurrentUserChange={(user) => setCurrentUser(user)} />} />
+              <Route path="/login" element={<Navigate to="/" replace />} />
+              <Route path="/register" element={<Navigate to="/" replace />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Layout>
+        ) : (
           <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/inventory" element={<Inventory />} />
-            <Route path="/sold" element={<Sold />} />
-            <Route path="/suppliers" element={<Suppliers />} />
-            <Route path="/journal" element={<Journal />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="/login" element={<Login onLogin={handleAuthSuccess} />} />
+            <Route path="/register" element={<Register onRegister={handleAuthSuccess} />} />
+            <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
-        </Layout>
+        )}
       </BrowserRouter>
     </ToastProvider>
   );

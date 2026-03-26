@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Plus, Search, ArrowUpDown, X, Pencil, Trash2, Download } from 'lucide-react';
 import { io } from 'socket.io-client';
-import { api, STATUS_COLORS } from '../App';
 import { useToast } from '../components/Toast';
+import { api, readApiError } from '../lib/api';
+import { STATUS_COLORS } from '../lib/status';
 
 const socket = io('/', { transports: ['websocket'] });
 
@@ -25,14 +26,6 @@ const DESTINATIONS = ['Продан', 'Продан на МВИДЕО', 'Пот�
 const isSoldDestination = (destination: string) => destination.startsWith('Продан');
 const isSoldStatus = (status: string) => status === 'Продан' || status === 'Продано';
 const formatCurrency = (value: number | string | null | undefined) => `${Number(value || 0).toLocaleString('ru-RU')} ₽`;
-const readApiError = async (res: Response, fallback: string) => {
-  try {
-    const data = await res.json();
-    return typeof data?.error === 'string' ? data.error : fallback;
-  } catch {
-    return fallback;
-  }
-};
 
 export default function Inventory() {
   const { show: toast } = useToast();
@@ -353,7 +346,7 @@ export default function Inventory() {
   );
 }
 
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
       <div className="card" style={{ width: '100%', maxWidth: '420px', position: 'relative' }}>

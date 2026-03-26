@@ -20,12 +20,16 @@ app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 
 const FALLBACK_JWT_SECRET = 'sklad-default-insecure-secret-change-me';
-const FALLBACK_FIRST_ADMIN_PASSWORD = 'admin12345';
+const FALLBACK_ADMIN_LOGIN = 'admin';
+const FALLBACK_ADMIN_EMAIL = 'admin@example.com';
+const FALLBACK_ADMIN_PASSWORD = 'admin12345';
 const config = getRuntimeConfig();
 const STATUS_IN_STOCK = 'Склад';
 const STATUS_SOLD = 'Продан';
 const STATUS_DEFECT = 'Брак';
 const STATUS_ARCHIVE = 'Архив';
+const USER_STATUS_ACTIVE = 'ACTIVE';
+const USER_STATUS_BLOCKED = 'BLOCKED';
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -58,9 +62,18 @@ function getRuntimeConfig() {
   if (!jwtSecret) {
     console.warn('[config] JWT_SECRET is not set. Using insecure fallback secret. Set JWT_SECRET in .env or the deployment environment.');
   }
+  const adminLogin = process.env.ADMIN_LOGIN?.trim();
+  const adminEmail = process.env.ADMIN_EMAIL?.trim();
+  const adminPassword = process.env.ADMIN_PASSWORD?.trim();
+  if (!adminLogin || !adminEmail || !adminPassword) {
+    console.warn('[config] ADMIN_LOGIN, ADMIN_EMAIL or ADMIN_PASSWORD is not fully set. Using insecure fallback administrator credentials until they are configured.');
+  }
   return {
     jwtSecret: jwtSecret || FALLBACK_JWT_SECRET,
-    firstAdminPassword: process.env.FIRST_ADMIN_PASSWORD || '',
+    adminLogin: adminLogin || FALLBACK_ADMIN_LOGIN,
+    adminEmail: adminEmail || FALLBACK_ADMIN_EMAIL,
+    adminPassword: adminPassword || FALLBACK_ADMIN_PASSWORD,
+    adminConfigured: Boolean(adminLogin && adminEmail && adminPassword),
   };
 }
 
@@ -76,6 +89,47 @@ function normalizeOptionalText(value) {
   if (value === undefined || value === null) return null;
   const normalized = String(value).trim().replace(/\s+/g, ' ');
   return normalized || null;
+}
+
+function normalizeEmail(value, fieldName = 'Email') {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!normalized) {
+    throw createValidationError(`${fieldName} обязателен`);
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+    throw createValidationError('Укажите корректный email');
+  }
+  return normalized;
+}
+
+function normalizeLogin(value, fieldName = 'Логин') {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!normalized) {
+    throw createValidationError(`${fieldName} обязателен`);
+  }
+  if (!/^[a-z0-9._-]{3,32}$/i.test(normalized)) {
+    throw createValidationError('Логин должен содержать от 3 до 32 символов: буквы, цифры, точки, подчёркивания или дефисы');
+  }
+  return normalized;
+}
+
+function normalizePhone(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const normalized = String(value).trim();
+  if (!/^[0-9+\-()\s]{6,20}$/.test(normalized)) {
+    throw createValidationError('Телефон должен содержать от 6 до 20 символов');
+  }
+  return normalized;
+}
+
+function normalizePassword(value, { fieldName = 'Пароль', minLength = 6 } = {}) {
+  if (typeof value !== 'string') {
+    throw createValidationError(`${fieldName} обязателен`);
+  }
+  if (value.length < minLength) {
+    throw createValidationError(`${fieldName} должен быть не короче ${minLength} символов`);
+  }
+  return value;
 }
 
 function normalizeImei(value) {
@@ -111,6 +165,111 @@ function getErrorStatus(error) {
 
 function getErrorMessage(error, fallback = 'Внутренняя ошибка сервера') {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function sanitizeUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    fullName: `${user.firstName} ${user.lastName}`.trim(),
+    login: user.login,
+    email: user.email,
+    phone: user.phone,
+    isAdmin: Boolean(user.isAdmin),
+    status: user.status,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+    lastLoginAt: user.lastLoginAt,
+  };
+}
+
+function getActorLabel(user) {
+  if (!user) return 'Система';
+  const fullName = `${user.firstName} ${user.lastName}`.trim();
+  return fullName ? `${fullName} (@${user.login})` : `@${user.login}`;
+}
+
+async function createAudit(action, details, user) {
+  const suffix = user ? ` • ${getActorLabel(user)}` : '';
+  await prisma.auditLog.create({ data: { action, details: `${details}${suffix}` } });
+}
+
+async function ensureUniqueUserFields({ login, email, excludeId } = {}) {
+  if (login) {
+    const existingByLogin = await prisma.user.findFirst({
+      where: {
+        login,
+        ...(excludeId ? { NOT: { id: excludeId } } : {}),
+      },
+      select: { id: true },
+    });
+    if (existingByLogin) {
+      throw createValidationError('Пользователь с таким логином уже существует', 409);
+    }
+  }
+  if (email) {
+    const existingByEmail = await prisma.user.findFirst({
+      where: {
+        email,
+        ...(excludeId ? { NOT: { id: excludeId } } : {}),
+      },
+      select: { id: true },
+    });
+    if (existingByEmail) {
+      throw createValidationError('Пользователь с таким email уже существует', 409);
+    }
+  }
+}
+
+function signAuthToken(user, rememberMe = false) {
+  return jwt.sign(
+    { sub: user.id, isAdmin: Boolean(user.isAdmin) },
+    config.jwtSecret,
+    { expiresIn: rememberMe ? '30d' : '1d' }
+  );
+}
+
+async function createAdminFromConfig() {
+  const login = normalizeLogin(config.adminLogin, 'ADMIN_LOGIN');
+  const email = normalizeEmail(config.adminEmail, 'ADMIN_EMAIL');
+  const password = normalizePassword(config.adminPassword, { fieldName: 'ADMIN_PASSWORD' });
+  const passwordHash = await bcrypt.hash(password, 10);
+  const existingUser = await prisma.user.findFirst({
+    where: {
+      OR: [{ login }, { email }],
+    },
+  });
+
+  if (existingUser) {
+    const promoted = await prisma.user.update({
+      where: { id: existingUser.id },
+      data: {
+        login,
+        email,
+        passwordHash,
+        isAdmin: true,
+        status: USER_STATUS_ACTIVE,
+      },
+    });
+    console.log(`[auth] Administrator access restored for @${promoted.login}`);
+    return promoted;
+  }
+
+  const admin = await prisma.user.create({
+    data: {
+      firstName: 'Системный',
+      lastName: 'Администратор',
+      login,
+      email,
+      passwordHash,
+      isAdmin: true,
+      status: USER_STATUS_ACTIVE,
+    },
+  });
+  console.log(`[auth] First administrator initialized for @${admin.login}`);
+  return admin;
 }
 
 async function ensureUniqueImei(imei, excludeId) {
@@ -244,15 +403,31 @@ function getDatePeriodStats(products, startDate) {
 }
 
 // ====== AUTH MIDDLEWARE ======
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const token = req.headers['authorization']?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Не авторизован' });
   try {
-    jwt.verify(token, config.jwtSecret);
+    const payload = jwt.verify(token, config.jwtSecret);
+    if (!payload?.sub || typeof payload.sub !== 'string') {
+      return res.status(401).json({ error: 'Токен недействителен' });
+    }
+    const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+    if (!user) return res.status(401).json({ error: 'Пользователь не найден' });
+    if (user.status !== USER_STATUS_ACTIVE) {
+      return res.status(403).json({ error: 'Аккаунт заблокирован' });
+    }
+    req.user = user;
     next();
   } catch {
     return res.status(401).json({ error: 'Токен недействителен' });
   }
+}
+
+function adminOnly(req, res, next) {
+  if (!req.user?.isAdmin) {
+    return res.status(403).json({ error: 'Недостаточно прав' });
+  }
+  next();
 }
 
 // ====== SEED DEFAULT DATA ======
@@ -269,41 +444,208 @@ async function seedDefaults() {
   }
   await prisma.product.updateMany({ where: { status: 'Активен' }, data: { status: STATUS_IN_STOCK } });
   await prisma.product.updateMany({ where: { status: 'Продано' }, data: { status: STATUS_SOLD } });
-  // First admin password via env
-  const existing = await prisma.setting.findUnique({ where: { key: 'password' } });
-  if (!existing && config.firstAdminPassword.trim()) {
-    if (config.firstAdminPassword.trim().length < 8) {
-      throw new Error('FIRST_ADMIN_PASSWORD must be at least 8 characters long');
-    }
-    const hashed = await bcrypt.hash(config.firstAdminPassword.trim(), 10);
-    await prisma.setting.create({ data: { key: 'password', value: hashed } });
-    console.log('Admin password initialized from FIRST_ADMIN_PASSWORD');
-  }
-  if (!existing && !config.firstAdminPassword.trim()) {
-    const hashed = await bcrypt.hash(FALLBACK_FIRST_ADMIN_PASSWORD, 10);
-    await prisma.setting.create({ data: { key: 'password', value: hashed } });
-    console.warn(`Admin password was auto-initialized with insecure fallback password: ${FALLBACK_FIRST_ADMIN_PASSWORD}`);
+  const existingAdmin = await prisma.user.findFirst({ where: { isAdmin: true } });
+  if (!existingAdmin) {
+    await createAdminFromConfig();
+  } else if (existingAdmin.status !== USER_STATUS_ACTIVE) {
+    await prisma.user.update({
+      where: { id: existingAdmin.id },
+      data: { status: USER_STATUS_ACTIVE },
+    });
   }
 }
 
 // ====== AUTH ======
 app.post('/api/auth/login', async (req, res) => {
-  const { password } = req.body;
-  const setting = await prisma.setting.findUnique({ where: { key: 'password' } });
-  if (!setting) return res.status(503).json({ error: 'Вход ещё не настроен. Укажите FIRST_ADMIN_PASSWORD в .env и перезапустите сервер.' });
-  const ok = await bcrypt.compare(password, setting.value);
-  if (!ok) return res.status(401).json({ error: 'Неверный пароль' });
-  const token = jwt.sign({ role: 'admin' }, config.jwtSecret, { expiresIn: '30d' });
-  res.json({ token });
+  try {
+    const loginInput = typeof req.body?.login === 'string' ? req.body.login.trim().toLowerCase() : '';
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    const rememberMe = Boolean(req.body?.rememberMe);
+    if (!loginInput) {
+      return res.status(400).json({ error: 'Укажите логин или email' });
+    }
+    if (!password) {
+      return res.status(400).json({ error: 'Укажите пароль' });
+    }
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [{ login: loginInput }, { email: loginInput }],
+      },
+    });
+    if (!user) return res.status(401).json({ error: 'Неверный логин или пароль' });
+    if (user.status !== USER_STATUS_ACTIVE) {
+      return res.status(403).json({ error: 'Аккаунт заблокирован' });
+    }
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: 'Неверный логин или пароль' });
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    });
+    const token = signAuthToken(updatedUser, rememberMe);
+    await createAudit('Вход в систему', `Пользователь вошёл в систему`, updatedUser);
+    res.json({ token, user: sanitizeUser(updatedUser) });
+  } catch (error) {
+    res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+  }
+});
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const firstName = normalizeRequiredText(req.body?.firstName, 'Имя');
+    const lastName = normalizeRequiredText(req.body?.lastName, 'Фамилия');
+    const login = normalizeLogin(req.body?.login);
+    const email = normalizeEmail(req.body?.email);
+    const password = normalizePassword(req.body?.password);
+    await ensureUniqueUserFields({ login, email });
+
+    const user = await prisma.user.create({
+      data: {
+        firstName,
+        lastName,
+        login,
+        email,
+        passwordHash: await bcrypt.hash(password, 10),
+        status: USER_STATUS_ACTIVE,
+      },
+    });
+
+    const token = signAuthToken(user, false);
+    await createAudit('Регистрация', `Создан новый аккаунт @${user.login}`);
+    res.status(201).json({ token, user: sanitizeUser(user) });
+  } catch (error) {
+    res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+  }
+});
+
+app.get('/api/auth/me', authMiddleware, async (req, res) => {
+  res.json({ user: sanitizeUser(req.user) });
 });
 
 app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
-  const { newPassword } = req.body;
-  const normalizedPassword = typeof newPassword === 'string' ? newPassword.trim() : '';
-  if (normalizedPassword.length < 8) return res.status(400).json({ error: 'Минимум 8 символов' });
-  const hashed = await bcrypt.hash(normalizedPassword, 10);
-  await prisma.setting.update({ where: { key: 'password' }, data: { value: hashed } });
-  await prisma.auditLog.create({ data: { action: 'Смена пароля', details: 'Пароль обновлён' } });
+  try {
+    const currentPassword = typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
+    const newPassword = normalizePassword(req.body?.newPassword, { fieldName: 'Новый пароль' });
+    if (!currentPassword) return res.status(400).json({ error: 'Укажите текущий пароль' });
+    const ok = await bcrypt.compare(currentPassword, req.user.passwordHash);
+    if (!ok) return res.status(401).json({ error: 'Текущий пароль указан неверно' });
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({ where: { id: req.user.id }, data: { passwordHash: hashed } });
+    await createAudit('Смена пароля', 'Пароль пользователя обновлён', req.user);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+  }
+});
+
+app.put('/api/auth/profile', authMiddleware, async (req, res) => {
+  try {
+    const data = {};
+    if (req.body?.firstName !== undefined) data.firstName = normalizeRequiredText(req.body.firstName, 'Имя');
+    if (req.body?.lastName !== undefined) data.lastName = normalizeRequiredText(req.body.lastName, 'Фамилия');
+    if (req.body?.login !== undefined) data.login = normalizeLogin(req.body.login);
+    if (req.body?.email !== undefined) data.email = normalizeEmail(req.body.email);
+    if (req.body?.phone !== undefined) data.phone = normalizePhone(req.body.phone);
+    if (Object.keys(data).length === 0) {
+      return res.status(400).json({ error: 'Нет данных для обновления профиля' });
+    }
+    await ensureUniqueUserFields({ login: data.login, email: data.email, excludeId: req.user.id });
+    const user = await prisma.user.update({ where: { id: req.user.id }, data });
+    await createAudit('Обновление профиля', 'Профиль пользователя обновлён', user);
+    res.json({ user: sanitizeUser(user) });
+  } catch (error) {
+    res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+  }
+});
+
+app.get('/api/users', authMiddleware, adminOnly, async (req, res) => {
+  const search = typeof req.query?.search === 'string' ? req.query.search.trim() : '';
+  const status = typeof req.query?.status === 'string' ? req.query.status.trim() : '';
+  const where = {};
+  if (search) {
+    where.OR = [
+      { firstName: { contains: search, mode: 'insensitive' } },
+      { lastName: { contains: search, mode: 'insensitive' } },
+      { login: { contains: search, mode: 'insensitive' } },
+      { email: { contains: search, mode: 'insensitive' } },
+      { phone: { contains: search, mode: 'insensitive' } },
+    ];
+  }
+  if (status) {
+    where.status = status;
+  }
+  const users = await prisma.user.findMany({ where, orderBy: [{ isAdmin: 'desc' }, { createdAt: 'desc' }] });
+  res.json(users.map(sanitizeUser));
+});
+
+app.post('/api/users', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const firstName = normalizeRequiredText(req.body?.firstName, 'Имя');
+    const lastName = normalizeRequiredText(req.body?.lastName, 'Фамилия');
+    const login = normalizeLogin(req.body?.login);
+    const email = normalizeEmail(req.body?.email);
+    const phone = normalizePhone(req.body?.phone);
+    const password = normalizePassword(req.body?.password);
+    await ensureUniqueUserFields({ login, email });
+    const user = await prisma.user.create({
+      data: {
+        firstName,
+        lastName,
+        login,
+        email,
+        phone,
+        passwordHash: await bcrypt.hash(password, 10),
+        status: USER_STATUS_ACTIVE,
+      },
+    });
+    await createAudit('Создание пользователя', `Создан пользователь @${user.login}`, req.user);
+    res.status(201).json({ user: sanitizeUser(user) });
+  } catch (error) {
+    res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+  }
+});
+
+app.put('/api/users/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const target = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!target) return res.status(404).json({ error: 'Пользователь не найден' });
+    const data = {};
+    if (req.body?.firstName !== undefined) data.firstName = normalizeRequiredText(req.body.firstName, 'Имя');
+    if (req.body?.lastName !== undefined) data.lastName = normalizeRequiredText(req.body.lastName, 'Фамилия');
+    if (req.body?.login !== undefined) data.login = normalizeLogin(req.body.login);
+    if (req.body?.email !== undefined) data.email = normalizeEmail(req.body.email);
+    if (req.body?.phone !== undefined) data.phone = normalizePhone(req.body.phone);
+    if (req.body?.status !== undefined) {
+      const status = String(req.body.status).trim().toUpperCase();
+      if (![USER_STATUS_ACTIVE, USER_STATUS_BLOCKED].includes(status)) {
+        return res.status(400).json({ error: 'Неизвестный статус аккаунта' });
+      }
+      if (target.id === req.user.id && status === USER_STATUS_BLOCKED) {
+        return res.status(400).json({ error: 'Нельзя заблокировать свой аккаунт' });
+      }
+      data.status = status;
+    }
+    if (req.body?.password) {
+      data.passwordHash = await bcrypt.hash(normalizePassword(req.body.password), 10);
+    }
+    if (Object.keys(data).length === 0) {
+      return res.status(400).json({ error: 'Нет данных для обновления пользователя' });
+    }
+    await ensureUniqueUserFields({ login: data.login, email: data.email, excludeId: target.id });
+    const user = await prisma.user.update({ where: { id: target.id }, data });
+    await createAudit('Редактирование пользователя', `Обновлён пользователь @${user.login}`, req.user);
+    res.json({ user: sanitizeUser(user) });
+  } catch (error) {
+    res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
+  }
+});
+
+app.delete('/api/users/:id', authMiddleware, adminOnly, async (req, res) => {
+  const target = await prisma.user.findUnique({ where: { id: req.params.id } });
+  if (!target) return res.status(404).json({ error: 'Пользователь не найден' });
+  if (target.id === req.user.id) return res.status(400).json({ error: 'Нельзя удалить свой аккаунт' });
+  await prisma.user.delete({ where: { id: target.id } });
+  await createAudit('Удаление пользователя', `Удалён пользователь @${target.login}`, req.user);
   res.json({ ok: true });
 });
 
@@ -311,20 +653,20 @@ app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
 app.get('/api/warehouses', authMiddleware, async (req, res) => {
   res.json(await prisma.warehouse.findMany({ orderBy: { name: 'asc' } }));
 });
-app.post('/api/warehouses', authMiddleware, async (req, res) => {
+app.post('/api/warehouses', authMiddleware, adminOnly, async (req, res) => {
   try {
     const name = normalizeRequiredText(req.body?.name, 'Название склада');
     const duplicate = await findCaseInsensitiveWarehouse(name);
     if (duplicate) return res.status(409).json({ error: 'Склад с таким названием уже существует' });
     const w = await prisma.warehouse.create({ data: { name } });
-    await prisma.auditLog.create({ data: { action: 'Добавлен склад', details: name } });
+    await createAudit('Добавлен склад', name, req.user);
     io.emit('settings:updated');
     res.status(201).json(w);
   } catch (error) {
     res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
   }
 });
-app.delete('/api/warehouses/:id', authMiddleware, async (req, res) => {
+app.delete('/api/warehouses/:id', authMiddleware, adminOnly, async (req, res) => {
   const current = await prisma.warehouse.findUnique({ where: { id: req.params.id } });
   if (!current) return res.status(404).json({ error: 'Не найден' });
   const usedCount = await prisma.product.count({ where: { warehouse: current.name } });
@@ -333,7 +675,7 @@ app.delete('/api/warehouses/:id', authMiddleware, async (req, res) => {
   }
   const w = await prisma.warehouse.delete({ where: { id: req.params.id } }).catch(() => null);
   if (!w) return res.status(404).json({ error: 'Не найден' });
-  await prisma.auditLog.create({ data: { action: 'Удалён склад', details: w.name } });
+  await createAudit('Удалён склад', w.name, req.user);
   io.emit('settings:updated');
   res.json({ ok: true });
 });
@@ -341,20 +683,20 @@ app.delete('/api/warehouses/:id', authMiddleware, async (req, res) => {
 app.get('/api/categories', authMiddleware, async (req, res) => {
   res.json(await prisma.category.findMany({ orderBy: { name: 'asc' } }));
 });
-app.post('/api/categories', authMiddleware, async (req, res) => {
+app.post('/api/categories', authMiddleware, adminOnly, async (req, res) => {
   try {
     const name = normalizeRequiredText(req.body?.name, 'Название категории');
     const duplicate = await findCaseInsensitiveCategory(name);
     if (duplicate) return res.status(409).json({ error: 'Категория с таким названием уже существует' });
     const c = await prisma.category.create({ data: { name } });
-    await prisma.auditLog.create({ data: { action: 'Добавлена категория', details: name } });
+    await createAudit('Добавлена категория', name, req.user);
     io.emit('settings:updated');
     res.status(201).json(c);
   } catch (error) {
     res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
   }
 });
-app.delete('/api/categories/:id', authMiddleware, async (req, res) => {
+app.delete('/api/categories/:id', authMiddleware, adminOnly, async (req, res) => {
   const current = await prisma.category.findUnique({ where: { id: req.params.id } });
   if (!current) return res.status(404).json({ error: 'Не найден' });
   const usedCount = await prisma.product.count({ where: { category: current.name } });
@@ -363,7 +705,7 @@ app.delete('/api/categories/:id', authMiddleware, async (req, res) => {
   }
   const c = await prisma.category.delete({ where: { id: req.params.id } }).catch(() => null);
   if (!c) return res.status(404).json({ error: 'Не найден' });
-  await prisma.auditLog.create({ data: { action: 'Удалена категория', details: c.name } });
+  await createAudit('Удалена категория', c.name, req.user);
   io.emit('settings:updated');
   res.json({ ok: true });
 });
@@ -381,7 +723,7 @@ app.post('/api/products', authMiddleware, async (req, res) => {
     const product = await prisma.product.create({
       data: { ...data, status: STATUS_IN_STOCK }
     });
-    await prisma.auditLog.create({ data: { action: 'Добавлен товар', details: `${product.name} (${product.warehouse})` } });
+    await createAudit('Добавлен товар', `${product.name} (${product.warehouse})`, req.user);
     io.emit('products:updated');
     res.status(201).json(product);
   } catch (error) {
@@ -402,7 +744,7 @@ app.put('/api/products/:id', authMiddleware, async (req, res) => {
       where: { id: req.params.id },
       data
     });
-    await prisma.auditLog.create({ data: { action: 'Отредактирован', details: product.name } });
+    await createAudit('Отредактирован', product.name, req.user);
     io.emit('products:updated');
     res.json(product);
   } catch (error) {
@@ -415,7 +757,7 @@ app.delete('/api/products/:id', authMiddleware, async (req, res) => {
   await prisma.movement.deleteMany({ where: { productId: req.params.id } });
   const product = await prisma.product.delete({ where: { id: req.params.id } }).catch(() => null);
   if (!product) return res.status(404).json({ error: 'Не найден' });
-  await prisma.auditLog.create({ data: { action: 'Удалён', details: product.name } });
+  await createAudit('Удалён', product.name, req.user);
   io.emit('products:updated');
   res.json({ ok: true });
 });
@@ -453,12 +795,11 @@ app.post('/api/products/:id/move', authMiddleware, async (req, res) => {
       date: date ? new Date(date) : new Date()
     }
   });
-  await prisma.auditLog.create({
-    data: {
-      action: 'Движение',
-      details: `${product.name} -> ${destination}${status === STATUS_SOLD ? ` (Заказ №${normalizedOrderNumber})` : ''}`
-    }
-  });
+  await createAudit(
+    'Движение',
+    `${product.name} -> ${destination}${status === STATUS_SOLD ? ` (Заказ №${normalizedOrderNumber})` : ''}`,
+    req.user
+  );
   io.emit('products:updated');
   res.json({ product });
 });
@@ -495,12 +836,11 @@ app.post('/api/products/bulk-move', authMiddleware, async (req, res) => {
       }
     });
   }
-  await prisma.auditLog.create({
-    data: {
-      action: 'Массовое движение',
-      details: `${products.length} товаров -> ${destination}${status === STATUS_SOLD ? ` (Заказ №${normalizedOrderNumber})` : ''}`
-    }
-  });
+  await createAudit(
+    'Массовое движение',
+    `${products.length} товаров -> ${destination}${status === STATUS_SOLD ? ` (Заказ №${normalizedOrderNumber})` : ''}`,
+    req.user
+  );
   io.emit('products:updated');
   res.json({ count: products.length });
 });
@@ -518,12 +858,11 @@ app.post('/api/products/:id/return', authMiddleware, async (req, res) => {
       comment: `Был: ${old.status}${old.orderNumber ? `, заказ №${old.orderNumber}` : ''}`
     }
   });
-  await prisma.auditLog.create({
-    data: {
-      action: 'Возврат',
-      details: `${product.name} (${old.status} -> ${STATUS_IN_STOCK}${old.orderNumber ? `, заказ №${old.orderNumber}` : ''})`
-    }
-  });
+  await createAudit(
+    'Возврат',
+    `${product.name} (${old.status} -> ${STATUS_IN_STOCK}${old.orderNumber ? `, заказ №${old.orderNumber}` : ''})`,
+    req.user
+  );
   io.emit('products:updated');
   res.json({ product });
 });
@@ -547,20 +886,20 @@ app.post('/api/suppliers', authMiddleware, async (req, res) => {
   const { name, phone, note } = req.body;
   if (!name) return res.status(400).json({ error: 'Имя обязательно' });
   const s = await prisma.supplier.create({ data: { name, phone: phone || '', note: note || '' } });
-  await prisma.auditLog.create({ data: { action: 'Добавлен поставщик', details: s.name } });
+  await createAudit('Добавлен поставщик', s.name, req.user);
   io.emit('suppliers:updated');
   res.status(201).json(s);
 });
 app.delete('/api/suppliers/:id', authMiddleware, async (req, res) => {
   const s = await prisma.supplier.delete({ where: { id: req.params.id } }).catch(() => null);
   if (!s) return res.status(404).json({ error: 'Не найден' });
-  await prisma.auditLog.create({ data: { action: 'Удалён поставщик', details: s.name } });
+  await createAudit('Удалён поставщик', s.name, req.user);
   io.emit('suppliers:updated');
   res.json({ ok: true });
 });
 
 // ====== AUDIT LOG ======
-app.get('/api/audit', authMiddleware, async (req, res) => {
+app.get('/api/audit', authMiddleware, adminOnly, async (req, res) => {
   const { from, to } = req.query;
   const where = {};
   if (from || to) {
@@ -793,7 +1132,7 @@ app.post('/api/import/excel', authMiddleware, async (req, res) => {
     }
 
     if (importedCount > 0) {
-      await prisma.auditLog.create({ data: { action: 'Импорт Excel', details: `Импортировано товаров: ${importedCount}` } });
+      await createAudit('Импорт Excel', `Импортировано товаров: ${importedCount}`, req.user);
       io.emit('products:updated');
     }
 
@@ -821,5 +1160,10 @@ app.get(/^(?!\/api).*/, (req, res) => res.sendFile(path.join(clientDist, 'index.
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
-  await seedDefaults();
+  try {
+    await seedDefaults();
+  } catch (error) {
+    console.error('[startup] Failed to initialize application data:', getErrorMessage(error));
+    server.close(() => process.exit(1));
+  }
 });

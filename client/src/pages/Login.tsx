@@ -1,35 +1,44 @@
 import { useState } from 'react';
-import { PackageOpen, Eye, EyeOff } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { PackageOpen, Eye, EyeOff, LogIn } from 'lucide-react';
 import { useToast } from '../components/Toast';
+import { readApiError } from '../lib/api';
+import type { AuthSuccessPayload } from '../types/auth';
 
-async function readApiError(res: Response, fallback: string) {
-  try {
-    const data = await res.json();
-    return typeof data?.error === 'string' ? data.error : fallback;
-  } catch {
-    return fallback;
-  }
-}
+type LoginProps = {
+  onLogin: (payload: AuthSuccessPayload) => void;
+};
 
-export default function Login({ onLogin }: { onLogin: (token: string) => void }) {
+export default function Login({ onLogin }: LoginProps) {
+  const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [show, setShow] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const { show: toast } = useToast();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!login.trim() || !password) {
+      toast('Укажи логин и пароль', 'error');
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login, password, rememberMe }),
+      });
       if (!res.ok) {
         toast(await readApiError(res, 'Ошибка входа'), 'error');
         setLoading(false);
         return;
       }
-      const { token } = await res.json();
-      localStorage.setItem('sklToken', token);
-      onLogin(token);
+      const data = await res.json();
+      onLogin({ token: data.token, user: data.user, rememberMe });
+      toast('Вход выполнен');
     } catch {
       toast('Ошибка подключения', 'error');
       setLoading(false);
@@ -37,35 +46,49 @@ export default function Login({ onLogin }: { onLogin: (token: string) => void })
   };
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--bg-primary)' }}>
-      <div className="card" style={{ width: '100%', maxWidth: '340px', textAlign: 'center' }}>
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
-          <div style={{ width: '52px', height: '52px', borderRadius: '14px', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+    <div className="auth-page">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <div className="auth-brand-icon">
             <PackageOpen size={26} />
           </div>
-        </div>
-        <h1 style={{ marginBottom: '4px', fontSize: '22px' }}>СКЛАД</h1>
-        <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', fontSize: '13px' }}>Введите пароль для входа</p>
-        <form onSubmit={handleSubmit}>
-          <div style={{ position: 'relative', marginBottom: '14px' }}>
-            <input
-              className="input-field"
-              type={show ? 'text' : 'password'}
-              placeholder="Пароль"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              style={{ width: '100%', paddingRight: '40px' }}
-              autoFocus
-            />
-            <button type="button" onClick={() => setShow(!show)} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-              {show ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
+          <div>
+            <h1 style={{ marginBottom: '6px', fontSize: '26px' }}>Вход в систему</h1>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Используй свой логин и пароль для входа в личный кабинет.</p>
           </div>
-          <button className="btn btn-primary" type="submit" disabled={loading} style={{ width: '100%', justifyContent: 'center', opacity: loading ? 0.6 : 1 }}>
-            {loading ? 'Вход...' : 'Войти'}
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <div className="input-group">
+            <label className="input-label">Логин или email</label>
+            <input className="input-field" value={login} onChange={e => setLogin(e.target.value)} autoFocus />
+          </div>
+
+          <div className="input-group">
+            <label className="input-label">Пароль</label>
+            <div className="password-field">
+              <input className="input-field" type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} style={{ paddingRight: '44px' }} />
+              <button type="button" className="password-toggle" onClick={() => setShowPassword(value => !value)}>
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '18px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />
+            Запомнить меня
+          </label>
+
+          <button className="btn btn-primary" type="submit" disabled={loading} style={{ width: '100%', justifyContent: 'center', opacity: loading ? 0.7 : 1 }}>
+            <LogIn size={16} />
+            {loading ? 'Входим...' : 'Войти'}
           </button>
         </form>
-        <p style={{ marginTop: '16px', fontSize: '11px', color: 'var(--text-secondary)' }}>Если вход ещё не настроен, задай `FIRST_ADMIN_PASSWORD` или посмотри временный пароль в логах сервера.</p>
+
+        <div className="auth-switch">
+          Нет аккаунта?
+          <Link to="/register"> Зарегистрироваться</Link>
+        </div>
       </div>
     </div>
   );
