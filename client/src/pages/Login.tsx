@@ -65,7 +65,7 @@ export default function Login({ onLogin }: { onLogin: (token: string) => void })
             {loading ? 'Вход...' : 'Войти'}
           </button>
         </form>
-        <p style={{ marginTop: '16px', fontSize: '11px', color: 'var(--text-secondary)' }}>Первый пароль задаётся через `FIRST_ADMIN_PASSWORD` на сервере.</p>
+        <p style={{ marginTop: '16px', fontSize: '11px', color: 'var(--text-secondary)' }}>Если вход ещё не настроен, задай `FIRST_ADMIN_PASSWORD` или посмотри временный пароль в логах сервера.</p>
       </div>
     </div>
   );

@@ -20,6 +20,8 @@ app.use(cors());
 app.use(express.json());
 
 const config = getRuntimeConfig();
+const FALLBACK_JWT_SECRET = 'sklad-default-insecure-secret-change-me';
+const FALLBACK_FIRST_ADMIN_PASSWORD = 'admin12345';
 
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -48,17 +50,14 @@ function requireEnv(name) {
 }
 
 function getRuntimeConfig() {
-  try {
-    return {
-      jwtSecret: requireEnv('JWT_SECRET'),
-      firstAdminPassword: process.env.FIRST_ADMIN_PASSWORD || '',
-    };
-  } catch (error) {
-    console.error('[config] Startup configuration error.');
-    console.error(`[config] ${getErrorMessage(error)}`);
-    console.error('[config] Add the missing values to .env or the deployment environment and restart the server.');
-    process.exit(1);
+  const jwtSecret = process.env.JWT_SECRET?.trim();
+  if (!jwtSecret) {
+    console.warn('[config] JWT_SECRET is not set. Using insecure fallback secret. Set JWT_SECRET in .env or the deployment environment.');
   }
+  return {
+    jwtSecret: jwtSecret || FALLBACK_JWT_SECRET,
+    firstAdminPassword: process.env.FIRST_ADMIN_PASSWORD || '',
+  };
 }
 
 function normalizeRequiredText(value, fieldName) {
@@ -212,7 +211,9 @@ async function seedDefaults() {
     console.log('Admin password initialized from FIRST_ADMIN_PASSWORD');
   }
   if (!existing && !config.firstAdminPassword.trim()) {
-    console.warn('Admin password is not configured. Set FIRST_ADMIN_PASSWORD in .env and restart the server.');
+    const hashed = await bcrypt.hash(FALLBACK_FIRST_ADMIN_PASSWORD, 10);
+    await prisma.setting.create({ data: { key: 'password', value: hashed } });
+    console.warn(`Admin password was auto-initialized with insecure fallback password: ${FALLBACK_FIRST_ADMIN_PASSWORD}`);
   }
 }
 
