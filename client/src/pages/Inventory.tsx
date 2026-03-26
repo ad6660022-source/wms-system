@@ -201,9 +201,17 @@ export default function Inventory() {
   const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const buffer = await file.arrayBuffer();
-    const fileData = Array.from(new Uint8Array(buffer));
-    const res = await api('/api/import/excel', { method: 'POST', body: JSON.stringify({ fileData }) });
+    const fileBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === 'string' ? reader.result : '';
+        resolve(result.includes(',') ? result.split(',')[1] : result);
+      };
+      reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+      reader.readAsDataURL(file);
+    });
+
+    const res = await api('/api/import/excel', { method: 'POST', body: JSON.stringify({ fileBase64 }) });
     if (!res.ok) {
       toast(await readApiError(res, 'Ошибка импорта'), 'error');
       event.target.value = '';
@@ -211,7 +219,12 @@ export default function Inventory() {
     }
     const data = await res.json();
     const errors = Array.isArray(data?.errors) ? data.errors : [];
-    toast(`Импортировано: ${data?.importedCount || 0}${errors.length ? `, ошибок: ${errors.length}` : ''}`, errors.length ? 'info' : 'success');
+    toast(
+      errors.length
+        ? `Импортировано: ${data?.importedCount || 0}. Ошибок: ${errors.length}. ${errors[0]}`
+        : `Импортировано: ${data?.importedCount || 0}${data?.skippedCount ? `, пропущено: ${data.skippedCount}` : ''}`,
+      errors.length ? 'info' : 'success'
+    );
     if (errors.length) {
       console.warn('Excel import errors', errors);
     }

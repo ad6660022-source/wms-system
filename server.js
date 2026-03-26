@@ -17,7 +17,7 @@ const prisma = new PrismaClient();
 loadEnvFile(path.join(__dirname, '.env'));
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '25mb' }));
 
 const FALLBACK_JWT_SECRET = 'sklad-default-insecure-secret-change-me';
 const FALLBACK_FIRST_ADMIN_PASSWORD = 'admin12345';
@@ -137,6 +137,22 @@ async function ensureCategoryExists(name) {
   if (!category) throw createValidationError('Выбранная категория не найдена');
 }
 
+async function ensureWarehouse(name, { createIfMissing = false } = {}) {
+  const normalized = normalizeRequiredText(name, 'Склад');
+  const existing = await prisma.warehouse.findUnique({ where: { name: normalized } });
+  if (existing) return existing;
+  if (!createIfMissing) throw createValidationError('Выбранный склад не найден');
+  return prisma.warehouse.create({ data: { name: normalized } });
+}
+
+async function ensureCategory(name, { createIfMissing = false } = {}) {
+  const normalized = normalizeRequiredText(name, 'Категория');
+  const existing = await prisma.category.findUnique({ where: { name: normalized } });
+  if (existing) return existing;
+  if (!createIfMissing) throw createValidationError('Выбранная категория не найдена');
+  return prisma.category.create({ data: { name: normalized } });
+}
+
 async function findCaseInsensitiveWarehouse(name) {
   const warehouses = await prisma.warehouse.findMany({ select: { id: true, name: true } });
   return warehouses.find(item => item.name.toLowerCase() === name.toLowerCase()) || null;
@@ -208,6 +224,15 @@ function getMovementStatus(destination) {
   if (typeof destination === 'string' && destination.startsWith('Продан')) return STATUS_SOLD;
   if (destination === STATUS_DEFECT) return STATUS_DEFECT;
   return STATUS_ARCHIVE;
+}
+
+function getCellValue(row, keys) {
+  for (const key of keys) {
+    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== '') {
+      return row[key];
+    }
+  }
+  return '';
 }
 
 function getDatePeriodStats(products, startDate) {
@@ -712,11 +737,15 @@ app.get('/api/export/import-template', authMiddleware, async (req, res) => {
 
 app.post('/api/import/excel', authMiddleware, async (req, res) => {
   try {
-    const { fileData } = req.body || {};
-    if (!Array.isArray(fileData) || fileData.length === 0) {
+    const { fileData, fileBase64 } = req.body || {};
+    const buffer = typeof fileBase64 === 'string' && fileBase64.trim()
+      ? Buffer.from(fileBase64, 'base64')
+      : Array.isArray(fileData) && fileData.length > 0
+        ? Buffer.from(fileData)
+        : null;
+    if (!buffer || buffer.length === 0) {
       return res.status(400).json({ error: 'Файл Excel не передан' });
     }
-    const buffer = Buffer.from(fileData);
     const workbook = XLSX.read(buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) return res.status(400).json({ error: 'В файле нет листов' });
@@ -731,14 +760,29 @@ app.post('/api/import/excel', authMiddleware, async (req, res) => {
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
       try {
+        const name = getCellValue(row, ['Название', 'name', 'Name']);
+        const imei = getCellValue(row, ['IMEI', 'imei']);
+        const purchasePrice = getCellValue(row, ['Цена закупки', 'Закупка', 'Цена', 'price']);
+        const salePrice = getCellValue(row, ['Цена продажи', 'Продажа', 'salePrice']);
+        const supplier = getCellValue(row, ['Поставщик', 'supplier']);
+        const warehouseName = getCellValue(row, ['Склад', 'warehouse']) || 'Василий';
+        const categoryName = getCellValue(row, ['Категория', 'category']) || 'Без категории';
+
+        if (!String(name || '').trim() && !String(imei || '').trim() && !String(purchasePrice || '').trim()) {
+          continue;
+        }
+
+        await ensureWarehouse(warehouseName, { createIfMissing: true });
+        await ensureCategory(categoryName, { createIfMissing: true });
+
         const data = await parseProductInput({
-          name: row['Название'],
-          imei: row['IMEI'],
-          price: row['Цена закупки'] ?? row['Цена'],
-          salePrice: row['Цена продажи'],
-          supplier: row['Поставщик'],
-          warehouse: row['Склад'],
-          category: row['Категория'],
+          name,
+          imei,
+          price: purchasePrice,
+          salePrice,
+          supplier,
+          warehouse: warehouseName,
+          category: categoryName,
         });
         await ensureUniqueImei(data.imei);
         await prisma.product.create({ data: { ...data, status: STATUS_IN_STOCK } });
@@ -753,7 +797,7 @@ app.post('/api/import/excel', authMiddleware, async (req, res) => {
       io.emit('products:updated');
     }
 
-    res.json({ importedCount, errors });
+    res.json({ importedCount, errors, skippedCount: rows.length - importedCount - errors.length });
   } catch (error) {
     res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
   }

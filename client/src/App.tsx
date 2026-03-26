@@ -87,6 +87,23 @@ const SalesPeriodCard = ({ title, count, revenue }: { title: string; count: numb
   </div>
 );
 
+const MetricCard = ({ title, value, hint, accent }: { title: string; value: React.ReactNode; hint: string; accent?: string }) => (
+  <div className="card" style={{ minHeight: '118px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+    <div className="caption">{title}</div>
+    <div style={{ fontSize: '28px', fontWeight: 500, color: accent || 'var(--text-primary)' }}>{value}</div>
+    <div style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>{hint}</div>
+  </div>
+);
+
+const SectionHeader = ({ title, caption }: { title: string; caption?: string }) => (
+  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'end', marginBottom: '14px', flexWrap: 'wrap' }}>
+    <div>
+      <h2 style={{ marginBottom: '4px' }}>{title}</h2>
+      {caption ? <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>{caption}</p> : null}
+    </div>
+  </div>
+);
+
 const SalesChart = ({ trend }: { trend: Array<{ label: string; count: number; revenue: number }> }) => {
   const maxRevenue = Math.max(...trend.map(item => item.revenue), 1);
 
@@ -137,63 +154,75 @@ const Dashboard = () => {
         <button className="btn btn-primary" onClick={exportExcel}><Download size={14} /> Excel</button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
-        <div className="card"><div className="caption">На складе</div><div style={{ fontSize: '26px', fontWeight: 500, marginTop: '6px', color: 'var(--system-green)' }}>{inventory.count}</div><div style={{ marginTop: '6px', color: 'var(--text-secondary)', fontSize: '12px' }}>{formatCurrency(inventory.value)}</div></div>
-        <div className="card"><div className="caption">Продано всего</div><div style={{ fontSize: '26px', fontWeight: 500, marginTop: '6px', color: 'var(--system-red)' }}>{inventory.soldCount}</div><div style={{ marginTop: '6px', color: 'var(--text-secondary)', fontSize: '12px' }}>{formatCurrency(inventory.soldRevenue)}</div></div>
-        <div className="card"><div className="caption">Всего товаров</div><div style={{ fontSize: '26px', fontWeight: 500, marginTop: '6px' }}>{stats?.totalProducts || 0}</div><div style={{ marginTop: '6px', color: 'var(--text-secondary)', fontSize: '12px' }}>Вся база</div></div>
-        <div className="card"><div className="caption">Брак</div><div style={{ fontSize: '26px', fontWeight: 500, marginTop: '6px', color: 'var(--system-orange)' }}>{inventory.defectCount}</div><div style={{ marginTop: '6px', color: 'var(--text-secondary)', fontSize: '12px' }}>Проблемные товары</div></div>
-      </div>
-
-      <h2 style={{ marginTop: '28px', marginBottom: '14px' }}>Продажи</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '14px' }}>
-        <SalesPeriodCard title="За день" count={sales.day.count} revenue={sales.day.revenue} />
-        <SalesPeriodCard title="За неделю" count={sales.week.count} revenue={sales.week.revenue} />
-        <SalesPeriodCard title="За месяц" count={sales.month.count} revenue={sales.month.revenue} />
-        <SalesPeriodCard title="За всё время" count={sales.all.count} revenue={sales.all.revenue} />
-      </div>
-
-      {trend.length > 0 && <SalesChart trend={trend} />}
-
-      {stats?.warehouseStats?.map((w: any) => (
-        <div key={w.name} style={{ marginTop: '28px' }}>
-          <h2 style={{ marginBottom: '6px' }}>Склад: {w.name}</h2>
-          <p style={{ color: 'var(--text-secondary)', marginBottom: '14px', fontSize: '13px' }}>
-            На складе: {w.active} | Продано: {w.sold} | Брак: {w.defect} | Стоимость: {formatCurrency(w.totalValue)}
-          </p>
-          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
-                <thead><tr style={{ background: 'var(--bg-primary)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
-                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Название</th>
-                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Закупка</th>
-                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Продажа</th>
-                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Категория</th>
-                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Статус</th>
-                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Дней на складе</th>
-                  <th style={{ padding: '10px 14px', fontWeight: 400 }}>Дней до продажи</th>
-                </tr></thead>
-                <tbody>
-                  {w.products.length === 0 ? <tr><td colSpan={7} style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)' }}>Нет товаров</td></tr> :
-                    w.products.map((p: any, i: number) => {
-                      const c = STATUS_COLORS[p.status] || STATUS_COLORS['Склад'];
-                      return (
-                        <tr key={i} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                          <td style={{ padding: '10px 14px', fontWeight: 400 }}>{p.name}</td>
-                          <td style={{ padding: '10px 14px' }}>{formatCurrency(p.purchasePrice)}</td>
-                          <td style={{ padding: '10px 14px' }}>{p.salePrice !== null && p.salePrice !== undefined ? formatCurrency(p.salePrice) : '-'}</td>
-                          <td style={{ padding: '10px 14px', fontSize: '12px' }}>{p.category}</td>
-                          <td style={{ padding: '10px 14px' }}><span style={{ background: c.bg, color: c.text, padding: '3px 8px', borderRadius: '5px', fontSize: '12px' }}>{p.status}</span></td>
-                          <td style={{ padding: '10px 14px', textAlign: 'center' }}>{p.daysOnStock !== null ? <span style={{ fontWeight: 500, color: p.daysOnStock > 30 ? 'var(--system-orange)' : 'var(--text-primary)' }}>{p.daysOnStock}д</span> : '-'}</td>
-                          <td style={{ padding: '10px 14px', textAlign: 'center' }}>{p.daysToSell !== null ? <span style={{ fontWeight: 500, color: 'var(--system-green)' }}>{p.daysToSell}д</span> : '-'}</td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-            </div>
+      <div style={{ display: 'grid', gap: '24px' }}>
+        <section>
+          <SectionHeader title="Остатки и выручка" caption="Ключевые показатели по текущему состоянию склада" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '14px' }}>
+            <MetricCard title="На складе" value={inventory.count} hint={formatCurrency(inventory.value)} accent="var(--system-green)" />
+            <MetricCard title="Продано всего" value={inventory.soldCount} hint={formatCurrency(inventory.soldRevenue)} accent="var(--system-red)" />
+            <MetricCard title="Всего товаров" value={stats?.totalProducts || 0} hint="Вся база товаров" />
+            <MetricCard title="Брак" value={inventory.defectCount} hint="Проблемные товары" accent="var(--system-orange)" />
           </div>
-        </div>
-      ))}
+        </section>
+
+        <section>
+          <SectionHeader title="Статистика продаж" caption="Сравнение продаж по основным периодам" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '14px' }}>
+            <SalesPeriodCard title="За день" count={sales.day.count} revenue={sales.day.revenue} />
+            <SalesPeriodCard title="За неделю" count={sales.week.count} revenue={sales.week.revenue} />
+            <SalesPeriodCard title="За месяц" count={sales.month.count} revenue={sales.month.revenue} />
+            <SalesPeriodCard title="За всё время" count={sales.all.count} revenue={sales.all.revenue} />
+          </div>
+        </section>
+
+        {trend.length > 0 && <SalesChart trend={trend} />}
+
+        <section>
+          <SectionHeader title="Склады" caption="Остатки и движение по каждому складу" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(520px, 100%), 1fr))', gap: '18px' }}>
+            {stats?.warehouseStats?.map((w: any) => (
+              <div key={w.name} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                <div style={{ padding: '18px 18px 12px' }}>
+                  <h3 style={{ marginBottom: '6px' }}>Склад: {w.name}</h3>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+                    На складе: {w.active} | Продано: {w.sold} | Брак: {w.defect} | Стоимость: {formatCurrency(w.totalValue)}
+                  </p>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+                    <thead><tr style={{ background: 'var(--bg-primary)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
+                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Название</th>
+                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Закупка</th>
+                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Продажа</th>
+                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Категория</th>
+                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Статус</th>
+                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Дней на складе</th>
+                      <th style={{ padding: '10px 14px', fontWeight: 400 }}>Дней до продажи</th>
+                    </tr></thead>
+                    <tbody>
+                      {w.products.length === 0 ? <tr><td colSpan={7} style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)' }}>Нет товаров</td></tr> :
+                        w.products.map((p: any, i: number) => {
+                          const c = STATUS_COLORS[p.status] || STATUS_COLORS['Склад'];
+                          return (
+                            <tr key={i} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                              <td style={{ padding: '10px 14px', fontWeight: 400 }}>{p.name}</td>
+                              <td style={{ padding: '10px 14px' }}>{formatCurrency(p.purchasePrice)}</td>
+                              <td style={{ padding: '10px 14px' }}>{p.salePrice !== null && p.salePrice !== undefined ? formatCurrency(p.salePrice) : '-'}</td>
+                              <td style={{ padding: '10px 14px', fontSize: '12px' }}>{p.category}</td>
+                              <td style={{ padding: '10px 14px' }}><span style={{ background: c.bg, color: c.text, padding: '3px 8px', borderRadius: '5px', fontSize: '12px' }}>{p.status}</span></td>
+                              <td style={{ padding: '10px 14px', textAlign: 'center' }}>{p.daysOnStock !== null ? <span style={{ fontWeight: 500, color: p.daysOnStock > 30 ? 'var(--system-orange)' : 'var(--text-primary)' }}>{p.daysOnStock}д</span> : '-'}</td>
+                              <td style={{ padding: '10px 14px', textAlign: 'center' }}>{p.daysToSell !== null ? <span style={{ fontWeight: 500, color: 'var(--system-green)' }}>{p.daysToSell}д</span> : '-'}</td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
     </div>
   );
 };
